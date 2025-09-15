@@ -1,4 +1,4 @@
-# Tutorial For Swallow-Project
+# Tutorial For Project-Swallow
 
 Latest package: [URL for Synology NAS](https://gofile.me/7xDmN/6LaSVzQNf)
 

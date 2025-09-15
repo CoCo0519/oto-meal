@@ -524,14 +524,22 @@ class DataLabeler:
                 'behavior': sample['behavior']
             })
         
-        # 保存为npz格式
+        # 将变长序列转换为object数组，避免形状不一致导致保存失败
+        ear_data_arr = np.array(all_ear_data, dtype=object)
+        labels_arr = np.array(all_labels, dtype=object)
+        behaviors_arr = np.array(all_behaviors, dtype=object)
+        events_arr = np.array(all_events, dtype=object)
+        file_info_arr = np.array(file_info, dtype=object)
+
+        # 保存为npz格式（需要允许pickle以支持object数组）
         np.savez_compressed(
             output_file,
-            ear_data=all_ear_data,
-            labels=all_labels,
-            behaviors=all_behaviors,
-            events=all_events,
-            file_info=file_info
+            ear_data=ear_data_arr,
+            labels=labels_arr,
+            behaviors=behaviors_arr,
+            events=events_arr,
+            file_info=file_info_arr,
+            allow_pickle=True
         )
         
         print(f"标注数据集已保存: {output_file}")
