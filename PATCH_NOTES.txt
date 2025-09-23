@@ -1,0 +1,37 @@
+
+Patch Notes (run_behavior_classification.py & config_example.json)
+------------------------------------------------------------------
+
+1) GPU 利用率提升（无需改动 pipeline）：
+   - 已在运行脚本中启用 cudnn.benchmark、TF32 和高精度矩阵乘设定；
+   - 打印 GPU/CPU 环境信息，便于诊断数据加载瓶颈；
+   - 自动注入 dataloader 建议参数（num_workers≈CPU核数一半，pin_memory, persistent_workers, prefetch_factor=2）。
+   - 若 pipeline 未读取这些参数，不会报错但也不会生效；建议在数据集/loader 构造处读取 temp_config['dataloader_params']。
+
+2) 支持多目录（*_data）自动收集：
+   - 新增 --data-glob 选项（或在 config_example.json 中设置 "data_glob": "./*_data"）。
+   - 运行时将自动遍历所有匹配文件夹，收集其下所有 .txt 文件并复制到临时目录 ._merged_data，
+     然后仍以单一 data_dir 传给旧版 pipeline，做到“无需改 pipeline 也能用多目录”。
+
+3) 关于报错 ValueError: shape mismatch in matplotlib.bar：
+   - 根因是分类数与颜色列表长度不一致（例如 class_names 长度=2，而 color 列表给了 4 种颜色）。
+   - 在 complete_training_pipeline.py 的 generate_comprehensive_report() 中，
+     将类似：
+        axes[1, 1].bar(class_names, class_f1s, color=['skyblue', 'lightgreen', 'salmon', 'gold'])
+     替换为：
+        colors = ['skyblue', 'lightgreen', 'salmon', 'gold']
+        if len(colors) < len(class_names):
+            # 循环扩展颜色，直到满足数量
+            times = (len(class_names) + len(colors) - 1) // len(colors)
+            colors = (colors * times)[:len(class_names)]
+        else:
+            colors = colors[:len(class_names)]
+        axes[1, 1].bar(class_names, class_f1s, color=colors)
+   - 同理，凡是显式给定颜色列表的柱状图/折线图都请使用与数据长度匹配的颜色序列，或干脆不传 color 参数交给默认色板。
+
+4) 额外建议以进一步提升 GPU 利用率：
+   - 在 DataLoader 中设置：pin_memory=True, persistent_workers=True, prefetch_factor>=2；
+   - 增大 batch_size（显存允许的情况下），减少 DataLoader 中昂贵的 Python 变换，尽量把预处理放到 Dataset.__getitem__ 之外或使用向量化；
+   - 使用 --quick-start 先验证流程，再切到 --full-pipeline；
+   - 如使用 PyTorch 2.x，可考虑在模型创建后加上 torch.compile(model)（需在 pipeline 内修改）。
+

@@ -1,0 +1,33 @@
+{
+  "data_dir": "./hyx_data",
+  "batch_size": 16,
+  "learning_rate": 0.0001,
+  "num_epochs": 100,
+  "patience": 15,
+  "k_folds": 5,
+  "test_size": 0.2,
+  "model_types": [
+    "cnn",
+    "transformer",
+    "fusion"
+  ],
+  "use_class_weights": true,
+  "augmentation": true,
+  "feature_types": [
+    "stft",
+    "time_series"
+  ],
+  "use_gpu": true,
+  "device_id": 0,
+  "use_amp": true,
+  "compile_model": false,
+  "multi_gpu": false,
+  "device_count": 1,
+  "dataloader_params": {
+    "num_workers": 4,
+    "pin_memory": true,
+    "persistent_workers": true,
+    "prefetch_factor": 2,
+    "drop_last": true
+  }
+}

@@ -31,12 +31,74 @@ from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.metrics import classification_report, confusion_matrix, f1_score
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
-from torch.optim.lr_scheduler import CosineAnnealingLR, ReduceLROnPlateau
-import torch.nn.functional as F
+try:
+    import torch
+    import torch.nn as nn
+    import torch.optim as optim
+    from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
+    from torch.optim.lr_scheduler import CosineAnnealingLR, ReduceLROnPlateau
+    import torch.nn.functional as F
+    TORCH_AVAILABLE = True
+except ImportError:
+    print("⚠️ PyTorch 未安装，将使用CPU模式")
+    TORCH_AVAILABLE = False
+    # 创建占位符类
+    class Dataset:
+        pass
+    class DataLoader:
+        pass
+    class WeightedRandomSampler:
+        pass
+    class nn:
+        class Module:
+            pass
+        class Linear:
+            pass
+        class Conv1d:
+            pass
+        class BatchNorm1d:
+            pass
+        class Dropout:
+            pass
+        class ReLU:
+            pass
+        class MaxPool1d:
+            pass
+        class AdaptiveAvgPool1d:
+            pass
+        class TransformerEncoder:
+            pass
+        class TransformerEncoderLayer:
+            pass
+        class LayerNorm:
+            pass
+        class MultiheadAttention:
+            pass
+        class Sequential:
+            pass
+    class optim:
+        class Adam:
+            def __init__(self, *args, **kwargs):
+                pass
+        class SGD:
+            def __init__(self, *args, **kwargs):
+                pass
+    class CosineAnnealingLR:
+        def __init__(self, *args, **kwargs):
+            pass
+    class ReduceLROnPlateau:
+        def __init__(self, *args, **kwargs):
+            pass
+    class F:
+        @staticmethod
+        def relu(x):
+            return x
+        @staticmethod
+        def max_pool1d(x, kernel_size):
+            return x
+        @staticmethod
+        def adaptive_avg_pool1d(x, output_size):
+            return x
 
 from tqdm import tqdm
 import logging
@@ -117,7 +179,9 @@ class TrainingPipeline:
     
     def __init__(self, config_path: Optional[str] = None):
         self.config = self._load_config(config_path)
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        # 智能设备选择
+        self.device = self._setup_device()
         self.feature_extractor = FeatureExtractor()
         self.scaler_stft = StandardScaler()
         self.scaler_time_series = StandardScaler()
@@ -128,6 +192,46 @@ class TrainingPipeline:
         
         logger.info(f"训练流水线初始化完成，使用设备: {self.device}")
         logger.info(f"输出目录: {self.output_dir}")
+        
+        # 初始化混合精度训练
+        self.scaler = None
+        if self.config.get('use_amp', False) and torch.cuda.is_available():
+            try:
+                from torch.cuda.amp import GradScaler
+                self.scaler = GradScaler()
+                logger.info("✅ 自动混合精度训练已启用")
+            except ImportError:
+                logger.warning("⚠️ 无法导入GradScaler，禁用混合精度训练")
+                self.config['use_amp'] = False
+    
+    def _setup_device(self):
+        """智能设备设置"""
+        if not torch.cuda.is_available():
+            return torch.device('cpu')
+        
+        # 检查是否指定了GPU设备
+        device_id = self.config.get('device_id', 0)
+        
+        # 检查CUDA_VISIBLE_DEVICES环境变量
+        if 'CUDA_VISIBLE_DEVICES' in os.environ:
+            visible_devices = os.environ['CUDA_VISIBLE_DEVICES']
+            if visible_devices:
+                device_id = int(visible_devices.split(',')[0])
+        
+        # 设置设备
+        device = torch.device(f'cuda:{device_id}')
+        torch.cuda.set_device(device_id)
+        
+        # 应用GPU优化设置
+        if self.config.get('use_gpu', True):
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            
+            if hasattr(torch, "set_float32_matmul_precision"):
+                torch.set_float32_matmul_precision("high")
+        
+        return device
     
     def _load_config(self, config_path: Optional[str]) -> Dict:
         """加载配置"""
@@ -142,7 +246,20 @@ class TrainingPipeline:
             'model_types': ['cnn', 'transformer', 'fusion'],
             'use_class_weights': True,
             'augmentation': True,
-            'feature_types': ['stft', 'time_series']
+            'feature_types': ['stft', 'time_series'],
+            'use_gpu': True,
+            'device_id': 0,
+            'use_amp': False,
+            'compile_model': False,
+            'multi_gpu': False,
+            'device_count': 1,
+            'dataloader_params': {
+                'num_workers': 4,
+                'pin_memory': True,
+                'persistent_workers': True,
+                'prefetch_factor': 2,
+                'drop_last': False
+            }
         }
         
         if config_path and os.path.exists(config_path):
@@ -271,22 +388,31 @@ class TrainingPipeline:
         else:
             sampler = None
         
+        # 获取GPU优化的数据加载器参数
+        dataloader_params = self.config.get('dataloader_params', {})
+        
         # 创建数据加载器
         train_loader = DataLoader(
             train_dataset,
             batch_size=self.config['batch_size'],
             sampler=sampler,
             shuffle=(sampler is None),
-            num_workers=4,
-            pin_memory=True
+            num_workers=dataloader_params.get('num_workers', 4),
+            pin_memory=dataloader_params.get('pin_memory', True),
+            persistent_workers=dataloader_params.get('persistent_workers', True),
+            prefetch_factor=dataloader_params.get('prefetch_factor', 2),
+            drop_last=dataloader_params.get('drop_last', False)
         )
         
         test_loader = DataLoader(
             test_dataset,
             batch_size=self.config['batch_size'],
             shuffle=False,
-            num_workers=4,
-            pin_memory=True
+            num_workers=dataloader_params.get('num_workers', 4),
+            pin_memory=dataloader_params.get('pin_memory', True),
+            persistent_workers=dataloader_params.get('persistent_workers', True),
+            prefetch_factor=dataloader_params.get('prefetch_factor', 2),
+            drop_last=False  # 测试时不丢弃数据
         )
         
         return train_loader, test_loader
@@ -296,7 +422,20 @@ class TrainingPipeline:
         """训练单个模型"""
         logger.info(f"开始训练 {model_name} 模型...")
         
+        # 模型编译优化（如果支持）
+        if self.config.get('compile_model', False) and hasattr(torch, 'compile'):
+            try:
+                model = torch.compile(model)
+                logger.info("✅ 模型编译优化已启用")
+            except Exception as e:
+                logger.warning(f"⚠️ 模型编译失败: {e}")
+        
         model = model.to(self.device)
+        
+        # 多GPU支持
+        if self.config.get('multi_gpu', False) and torch.cuda.device_count() > 1:
+            model = nn.DataParallel(model)
+            logger.info(f"✅ 多GPU训练已启用: {torch.cuda.device_count()} 个GPU")
         
         # 损失函数和优化器
         if self.config['use_class_weights']:
@@ -340,27 +479,52 @@ class TrainingPipeline:
             train_pbar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{self.config["num_epochs"]} [Train]')
             
             for batch_stft, batch_ts, batch_labels in train_pbar:
-                batch_stft = batch_stft.to(self.device)
-                batch_ts = batch_ts.to(self.device)
-                batch_labels = batch_labels.to(self.device)
+                batch_stft = batch_stft.to(self.device, non_blocking=True)
+                batch_ts = batch_ts.to(self.device, non_blocking=True)
+                batch_labels = batch_labels.to(self.device, non_blocking=True)
                 
                 optimizer.zero_grad()
                 
-                # 前向传播（根据模型类型选择输入）
-                if model_name == 'fusion':
-                    outputs = model(batch_stft, batch_ts)
-                elif model_name == 'cnn':
-                    outputs = model(batch_stft)
-                elif model_name == 'transformer':
-                    outputs = model(batch_ts)
-                
-                loss = criterion(outputs, batch_labels)
-                loss.backward()
-                
-                # 梯度裁剪
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                
-                optimizer.step()
+                # 混合精度训练
+                if self.config.get('use_amp', False) and self.scaler is not None:
+                    with torch.cuda.amp.autocast():
+                        # 前向传播（根据模型类型选择输入）
+                        if model_name == 'fusion':
+                            outputs = model(batch_stft, batch_ts)
+                        elif model_name == 'cnn':
+                            outputs = model(batch_stft)
+                        elif model_name == 'transformer':
+                            outputs = model(batch_ts)
+                        
+                        loss = criterion(outputs, batch_labels)
+                    
+                    # 反向传播（混合精度）
+                    self.scaler.scale(loss).backward()
+                    
+                    # 梯度裁剪
+                    self.scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    
+                    # 优化器步骤
+                    self.scaler.step(optimizer)
+                    self.scaler.update()
+                else:
+                    # 标准精度训练
+                    # 前向传播（根据模型类型选择输入）
+                    if model_name == 'fusion':
+                        outputs = model(batch_stft, batch_ts)
+                    elif model_name == 'cnn':
+                        outputs = model(batch_stft)
+                    elif model_name == 'transformer':
+                        outputs = model(batch_ts)
+                    
+                    loss = criterion(outputs, batch_labels)
+                    loss.backward()
+                    
+                    # 梯度裁剪
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    
+                    optimizer.step()
                 
                 # 统计
                 train_loss += loss.item()
@@ -386,19 +550,30 @@ class TrainingPipeline:
                 val_pbar = tqdm(test_loader, desc=f'Epoch {epoch+1}/{self.config["num_epochs"]} [Val]')
                 
                 for batch_stft, batch_ts, batch_labels in val_pbar:
-                    batch_stft = batch_stft.to(self.device)
-                    batch_ts = batch_ts.to(self.device)
-                    batch_labels = batch_labels.to(self.device)
+                    batch_stft = batch_stft.to(self.device, non_blocking=True)
+                    batch_ts = batch_ts.to(self.device, non_blocking=True)
+                    batch_labels = batch_labels.to(self.device, non_blocking=True)
                     
-                    # 前向传播
-                    if model_name == 'fusion':
-                        outputs = model(batch_stft, batch_ts)
-                    elif model_name == 'cnn':
-                        outputs = model(batch_stft)
-                    elif model_name == 'transformer':
-                        outputs = model(batch_ts)
-                    
-                    loss = criterion(outputs, batch_labels)
+                    # 前向传播（验证时也使用混合精度）
+                    if self.config.get('use_amp', False) and self.scaler is not None:
+                        with torch.cuda.amp.autocast():
+                            if model_name == 'fusion':
+                                outputs = model(batch_stft, batch_ts)
+                            elif model_name == 'cnn':
+                                outputs = model(batch_stft)
+                            elif model_name == 'transformer':
+                                outputs = model(batch_ts)
+                            
+                            loss = criterion(outputs, batch_labels)
+                    else:
+                        if model_name == 'fusion':
+                            outputs = model(batch_stft, batch_ts)
+                        elif model_name == 'cnn':
+                            outputs = model(batch_stft)
+                        elif model_name == 'transformer':
+                            outputs = model(batch_ts)
+                        
+                        loss = criterion(outputs, batch_labels)
                     
                     val_loss += loss.item()
                     _, predicted = outputs.max(1)
@@ -438,6 +613,17 @@ class TrainingPipeline:
             if early_stopping(val_acc, model):
                 logger.info(f"早停触发，在第 {epoch+1} 轮停止训练")
                 break
+            
+            # GPU内存监控
+            if torch.cuda.is_available():
+                allocated = torch.cuda.memory_allocated() / (1024**3)
+                reserved = torch.cuda.memory_reserved() / (1024**3)
+                logger.info(f'GPU内存: {allocated:.2f}GB / {reserved:.2f}GB (已用/保留)')
+                
+                # 如果内存使用率过高，清理缓存
+                if allocated > 0.8 * torch.cuda.get_device_properties(0).total_memory / (1024**3):
+                    torch.cuda.empty_cache()
+                    logger.info("🧹 GPU内存缓存已清理")
             
             # 记录日志
             logger.info(

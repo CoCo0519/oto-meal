@@ -1,0 +1,35 @@
+{
+  "data_dir": "./hyx_data",
+  "model_types": [
+    "fusion"
+  ],
+  "use_gpu": false,
+  "mixed_precision": false,
+  "gradient_accumulation_steps": 1,
+  "gradient_clip_norm": 1.0,
+  "dataloader_params": {
+    "num_workers": 2,
+    "pin_memory": false,
+    "persistent_workers": false,
+    "prefetch_factor": 2,
+    "drop_last": false
+  },
+  "device_id": 0,
+  "use_amp": false,
+  "compile_model": false,
+  "batch_size": 4,
+  "use_tensor_cores": false,
+  "multi_gpu": false,
+  "device_count": 1,
+  "learning_rate": 0.0001,
+  "num_epochs": 50,
+  "patience": 10,
+  "k_folds": 3,
+  "test_size": 0.2,
+  "use_class_weights": true,
+  "augmentation": true,
+  "feature_types": [
+    "stft",
+    "time_series"
+  ]
+}

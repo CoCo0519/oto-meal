@@ -1,0 +1,21 @@
+
+version: '3.8'
+
+services:
+  gpu-training:
+    build: .
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    volumes:
+      - .:/app
+      - ./results:/app/results
+    command: python run_behavior_classification.py --full-pipeline --mixed-precision --batch-size 32
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

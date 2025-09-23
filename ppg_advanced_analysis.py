@@ -13,6 +13,7 @@ from scipy import signal
 from scipy.signal import savgol_filter, medfilt, butter, filtfilt, wiener
 import os
 import sys
+import glob
 from pathlib import Path
 
 def notch_filter_simple(x, fs, f0=50, Q=30):
@@ -90,13 +91,34 @@ def calculate_snr(original, denoised):
         snr_db = float('inf')
     return snr_db
 
-def advanced_ppg_analysis(txt_path, channel='green', save_dir=None):
+def check_available_channels(txt_path):
+    """检查数据文件可用的通道"""
+    try:
+        data = np.loadtxt(txt_path, skiprows=1, encoding='utf-8')
+    except:
+        try:
+            data = np.loadtxt(txt_path, skiprows=1, encoding='gbk')
+        except:
+            return ['green']  # 默认返回green通道
+    
+    num_columns = data.shape[1] if len(data.shape) > 1 else 1
+    
+    # 根据列数确定可用通道
+    if num_columns >= 3:
+        return ['green', 'ir', 'red']
+    elif num_columns >= 2:
+        return ['green', 'ir']
+    else:
+        return ['green']
+
+def advanced_ppg_analysis(txt_path, channel='green', save_dir=None, save_denoised_data=True):
     """
     高级PPG信号分析
     Args:
         txt_path: txt文件路径
         channel: PPG通道
         save_dir: 保存目录
+        save_denoised_data: 是否保存降噪后的数据
     """
     print(f"🔍 开始高级PPG信号分析...")
     print(f"📁 输入文件: {txt_path}")
@@ -184,100 +206,101 @@ def advanced_ppg_analysis(txt_path, channel='green', save_dir=None):
     
     base_name = Path(txt_path).stem
     
-    # 设置matplotlib
-    plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial']
+    # 设置matplotlib - 支持中文显示
+    plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'DejaVu Sans', 'Arial', 'sans-serif']
     plt.rcParams['axes.unicode_minus'] = False
+    plt.rcParams['font.size'] = 10
     
-    # ====== 图像1: 三合一对比图 ======
+    # ====== Image 1: Comprehensive Analysis ======
     fig = plt.figure(figsize=(18, 12))
-    fig.suptitle(f'PPG信号完整分析 - {channel.upper()}通道\n文件: {base_name}', 
+    fig.suptitle(f'PPG Signal Comprehensive Analysis - {channel.upper()} Channel\nFile: {base_name}', 
                 fontsize=16, fontweight='bold')
     
-    # 子图1: 原始信号
+    # Subplot 1: Original Signal
     ax1 = plt.subplot(3, 1, 1)
     plt.plot(time_axis, ppg_raw, 'b-', linewidth=1, alpha=0.8)
-    plt.title('🔵 1. 原始PPG信号', fontsize=14, fontweight='bold', pad=20)
-    plt.ylabel('幅值')
+    plt.title('1. Original PPG Signal', fontsize=14, fontweight='bold', pad=20)
+    plt.ylabel('Amplitude')
     plt.grid(True, alpha=0.3)
     
-    # 统计信息
-    stats_text = (f'均值: {np.mean(ppg_raw):.0f}\n'
-                 f'标准差: {np.std(ppg_raw):.0f}\n'
-                 f'峰峰值: {np.ptp(ppg_raw):.0f}')
+    # Statistics
+    stats_text = (f'Mean: {np.mean(ppg_raw):.0f}\n'
+                 f'Std Dev: {np.std(ppg_raw):.0f}\n'
+                 f'Peak-to-Peak: {np.ptp(ppg_raw):.0f}')
     ax1.text(0.02, 0.98, stats_text, transform=ax1.transAxes, 
              verticalalignment='top', fontsize=10,
              bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
     
-    # 子图2: 降噪对比
+    # Subplot 2: Denoising Comparison
     ax2 = plt.subplot(3, 1, 2)
-    plt.plot(time_axis, ppg_preprocessed, 'g-', linewidth=1, alpha=0.7, label='预处理信号')
-    plt.plot(time_axis, ppg_best_denoised, 'r-', linewidth=1.5, label=f'最佳降噪 ({best_method})')
-    plt.title('🔴 2. 降噪后PPG信号', fontsize=14, fontweight='bold', pad=20)
-    plt.ylabel('幅值')
+    plt.plot(time_axis, ppg_preprocessed, 'g-', linewidth=1, alpha=0.7, label='Preprocessed Signal')
+    plt.plot(time_axis, ppg_best_denoised, 'r-', linewidth=1.5, label=f'Best Denoised ({best_method})')
+    plt.title('2. Denoised PPG Signal', fontsize=14, fontweight='bold', pad=20)
+    plt.ylabel('Amplitude')
     plt.legend(loc='upper right')
     plt.grid(True, alpha=0.3)
     
-    # 降噪效果
+    # Denoising Performance
     best_perf = method_performance[best_method]
-    noise_text = (f'SNR提升: {best_perf["snr_db"]:.1f} dB\n'
-                 f'标准差减少: {best_perf["std_reduction"]:.1f}\n'
-                 f'降噪方法: {best_method}')
+    noise_text = (f'SNR Improvement: {best_perf["snr_db"]:.1f} dB\n'
+                 f'Std Dev Reduction: {best_perf["std_reduction"]:.1f}\n'
+                 f'Method: {best_method}')
     ax2.text(0.02, 0.98, noise_text, transform=ax2.transAxes,
              verticalalignment='top', fontsize=10,
              bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.8))
     
-    # 子图3: STFT时频图
+    # Subplot 3: STFT Spectrogram
     ax3 = plt.subplot(3, 1, 3)
-    freq_mask = freq_denoised <= 10  # 只显示0-10Hz
+    freq_mask = freq_denoised <= 10  # Only show 0-10Hz
     
     im = plt.pcolormesh(time_denoised, freq_denoised[freq_mask], 
                        mag_denoised_db[freq_mask, :],
                        shading='gouraud', cmap='jet')
     
-    plt.title('🌈 3. STFT时频谱图 (降噪后)', fontsize=14, fontweight='bold', pad=20)
-    plt.xlabel('时间 (秒)')
-    plt.ylabel('频率 (Hz)')
+    plt.title('3. STFT Spectrogram (Denoised)', fontsize=14, fontweight='bold', pad=20)
+    plt.xlabel('Time (s)')
+    plt.ylabel('Frequency (Hz)')
     
-    # 颜色条
+    # Colorbar
     cbar = plt.colorbar(im, ax=ax3)
-    cbar.set_label('幅度 (dB)', rotation=270, labelpad=20)
+    cbar.set_label('Magnitude (dB)', rotation=270, labelpad=20)
     
-    # 心率频带标注
-    plt.axhspan(0.8, 3.5, alpha=0.15, color='white', label='心率频带 (0.8-3.5Hz)')
+    # Heart Rate Band Annotation
+    plt.axhspan(0.8, 3.5, alpha=0.15, color='white', label='Heart Rate Band (0.8-3.5Hz)')
     plt.legend(loc='upper right')
     
-    # 频谱分析结果
+    # Spectral Analysis Results
     avg_spectrum = np.mean(np.abs(Zxx_denoised)[freq_mask, :], axis=1)
     peak_freq_idx = np.argmax(avg_spectrum)
     peak_freq = freq_denoised[freq_mask][peak_freq_idx]
     estimated_hr = peak_freq * 60
     
-    freq_text = (f'主频率: {peak_freq:.2f} Hz\n'
-                f'估计心率: {estimated_hr:.0f} BPM\n'
-                f'频谱峰值: {np.max(mag_denoised_db):.1f} dB')
+    freq_text = (f'Peak Frequency: {peak_freq:.2f} Hz\n'
+                f'Estimated HR: {estimated_hr:.0f} BPM\n'
+                f'Spectral Peak: {np.max(mag_denoised_db):.1f} dB')
     ax3.text(0.02, 0.98, freq_text, transform=ax3.transAxes,
              verticalalignment='top', fontsize=10,
              bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
     
     plt.tight_layout()
     
-    # 保存主要对比图
-    main_save_path = save_dir / f'{base_name}_{channel}_三合一分析.png'
+    # Save main comparison plot
+    main_save_path = save_dir / f'{base_name}_{channel}_comprehensive_analysis.png'
     plt.savefig(main_save_path, dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"   ✅ 主要对比图已保存: {main_save_path}")
+    print(f"   ✅ Main comparison plot saved: {main_save_path}")
     
-    # ====== 图像2: 降噪方法对比 ======
+    # ====== Image 2: Denoising Methods Comparison ======
     fig, axes = plt.subplots(4, 2, figsize=(16, 12))
-    fig.suptitle(f'降噪方法对比 - {channel.upper()}通道', fontsize=16, fontweight='bold')
+    fig.suptitle(f'Denoising Methods Comparison - {channel.upper()} Channel', fontsize=16, fontweight='bold')
     
     methods = ['savgol', 'median', 'wiener', 'wavelet_approx', 
                'combined', 'heart_rate_band', 'adaptive']
-    method_names = ['Savitzky-Golay', '中值滤波', '维纳滤波', '小波近似',
-                   '组合降噪', '心率带通', '自适应滤波']
+    method_names = ['Savitzky-Golay', 'Median Filter', 'Wiener Filter', 'Wavelet Approx',
+                   'Combined Denoising', 'Heart Rate Bandpass', 'Adaptive Filter']
     
     for i, (method, name) in enumerate(zip(methods, method_names)):
-        if i >= 7:  # 只显示前7个方法
+        if i >= 7:  # Only show first 7 methods
             break
             
         row, col = i // 2, i % 2
@@ -287,101 +310,142 @@ def advanced_ppg_analysis(txt_path, channel='green', save_dir=None):
             denoised_signal = method_performance[method]['signal']
             snr = method_performance[method]['snr_db']
             
-            # 绘制对比
-            ax.plot(time_axis, ppg_preprocessed, 'b-', linewidth=1, alpha=0.5, label='预处理')
+            # Plot comparison
+            ax.plot(time_axis, ppg_preprocessed, 'b-', linewidth=1, alpha=0.5, label='Preprocessed')
             ax.plot(time_axis, denoised_signal, 'r-', linewidth=1.2, label=name)
             
             ax.set_title(f'{name} (SNR: {snr:.1f}dB)', fontweight='bold')
-            ax.set_xlabel('时间 (秒)')
-            ax.set_ylabel('幅值')
+            ax.set_xlabel('Time (s)')
+            ax.set_ylabel('Amplitude')
             ax.legend(fontsize=8)
             ax.grid(True, alpha=0.3)
             
-            # 标记最佳方法
+            # Mark best method
             if method == best_method:
-                ax.set_facecolor('#f0f8ff')  # 浅蓝色背景
-                ax.set_title(f'🏆 {name} (SNR: {snr:.1f}dB) - 最佳', 
+                ax.set_facecolor('#f0f8ff')  # Light blue background
+                ax.set_title(f'Best: {name} (SNR: {snr:.1f}dB)', 
                            fontweight='bold', color='red')
     
-    # 隐藏最后一个空子图
+    # Hide last empty subplot
     if len(methods) < 8:
         axes[3, 1].set_visible(False)
     
     plt.tight_layout()
     
-    # 保存降噪对比图
-    comparison_save_path = save_dir / f'{base_name}_{channel}_降噪方法对比.png'
+    # Save denoising comparison plot
+    comparison_save_path = save_dir / f'{base_name}_{channel}_denoising_comparison.png'
     plt.savefig(comparison_save_path, dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"   ✅ 降噪对比图已保存: {comparison_save_path}")
+    print(f"   ✅ Denoising comparison plot saved: {comparison_save_path}")
     
-    # ====== 图像3: STFT对比图 ======
+    # ====== Image 3: STFT Comparison ======
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
-    fig.suptitle(f'STFT对比：降噪前后 - {channel.upper()}通道', fontsize=16, fontweight='bold')
+    fig.suptitle(f'STFT Comparison: Before vs After Denoising - {channel.upper()} Channel', fontsize=16, fontweight='bold')
     
-    # 降噪前STFT
+    # Before denoising STFT
     im1 = ax1.pcolormesh(time_orig, freq_orig[freq_orig <= 10], 
                         mag_orig_db[freq_orig <= 10, :],
                         shading='gouraud', cmap='jet')
-    ax1.set_title('降噪前 STFT', fontsize=14, fontweight='bold')
-    ax1.set_ylabel('频率 (Hz)')
+    ax1.set_title('STFT Before Denoising', fontsize=14, fontweight='bold')
+    ax1.set_ylabel('Frequency (Hz)')
     cbar1 = plt.colorbar(im1, ax=ax1)
-    cbar1.set_label('幅度 (dB)', rotation=270, labelpad=20)
+    cbar1.set_label('Magnitude (dB)', rotation=270, labelpad=20)
     
-    # 降噪后STFT
+    # After denoising STFT
     im2 = ax2.pcolormesh(time_denoised, freq_denoised[freq_denoised <= 10], 
                         mag_denoised_db[freq_denoised <= 10, :],
                         shading='gouraud', cmap='jet')
-    ax2.set_title(f'降噪后 STFT ({best_method})', fontsize=14, fontweight='bold')
-    ax2.set_xlabel('时间 (秒)')
-    ax2.set_ylabel('频率 (Hz)')
+    ax2.set_title(f'STFT After Denoising ({best_method})', fontsize=14, fontweight='bold')
+    ax2.set_xlabel('Time (s)')
+    ax2.set_ylabel('Frequency (Hz)')
     cbar2 = plt.colorbar(im2, ax=ax2)
-    cbar2.set_label('幅度 (dB)', rotation=270, labelpad=20)
+    cbar2.set_label('Magnitude (dB)', rotation=270, labelpad=20)
     
-    # 标注心率频带
+    # Annotate heart rate band
     for ax in [ax1, ax2]:
         ax.axhspan(0.8, 3.5, alpha=0.15, color='white')
     
     plt.tight_layout()
     
-    # 保存STFT对比图
-    stft_save_path = save_dir / f'{base_name}_{channel}_STFT对比.png'
+    # Save STFT comparison plot
+    stft_save_path = save_dir / f'{base_name}_{channel}_STFT_comparison.png'
     plt.savefig(stft_save_path, dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"   ✅ STFT对比图已保存: {stft_save_path}")
+    print(f"   ✅ STFT comparison plot saved: {stft_save_path}")
     
-    # 6. 输出详细分析结果
+    # 6. Output detailed analysis results
     print("\n" + "="*70)
-    print("🎯 PPG信号高级分析结果")
+    print("PPG Signal Advanced Analysis Results")
     print("="*70)
-    print(f"📁 输入文件: {Path(txt_path).name}")
-    print(f"📊 PPG通道: {channel.upper()}")
-    print(f"⏱️  信号时长: {time_axis[-1]:.1f} 秒 ({len(ppg_raw)} 样本点)")
-    print(f"🔄 采样率: {fs} Hz")
-    print(f"⚡ 工频: {mains} Hz")
+    print(f"Input File: {Path(txt_path).name}")
+    print(f"PPG Channel: {channel.upper()}")
+    print(f"Signal Duration: {time_axis[-1]:.1f} seconds ({len(ppg_raw)} samples)")
+    print(f"Sampling Rate: {fs} Hz")
+    print(f"Power Line Frequency: {mains} Hz")
     print()
-    print("📈 原始信号统计:")
-    print(f"   均值: {np.mean(ppg_raw):.2f}")
-    print(f"   标准差: {np.std(ppg_raw):.2f}")
-    print(f"   峰峰值: {np.ptp(ppg_raw):.2f}")
+    print("Original Signal Statistics:")
+    print(f"   Mean: {np.mean(ppg_raw):.2f}")
+    print(f"   Std Dev: {np.std(ppg_raw):.2f}")
+    print(f"   Peak-to-Peak: {np.ptp(ppg_raw):.2f}")
     print()
-    print("🔧 降噪方法性能排名:")
+    print("Denoising Methods Performance Ranking:")
     sorted_methods = sorted(method_performance.items(), 
                           key=lambda x: x[1]['snr_db'], reverse=True)
     for i, (method, perf) in enumerate(sorted_methods, 1):
-        marker = "🏆" if method == best_method else f"{i}️⃣"
-        print(f"   {marker} {method}: SNR={perf['snr_db']:.1f}dB, "
-              f"标准差减少={perf['std_reduction']:.2f}")
+        marker = "Best" if method == best_method else f"{i}"
+        print(f"   {marker}. {method}: SNR={perf['snr_db']:.1f}dB, "
+              f"Std Dev Reduction={perf['std_reduction']:.2f}")
     print()
-    print("🎵 频谱分析:")
-    print(f"   主频率: {peak_freq:.2f} Hz")
-    print(f"   估计心率: {estimated_hr:.0f} BPM")
-    print(f"   频谱峰值: {np.max(mag_denoised_db):.1f} dB")
+    print("Spectral Analysis:")
+    print(f"   Peak Frequency: {peak_freq:.2f} Hz")
+    print(f"   Estimated Heart Rate: {estimated_hr:.0f} BPM")
+    print(f"   Spectral Peak: {np.max(mag_denoised_db):.1f} dB")
     print()
-    print("💾 输出文件:")
-    print(f"   主要分析图: {main_save_path.name}")
-    print(f"   降噪对比图: {comparison_save_path.name}")
-    print(f"   STFT对比图: {stft_save_path.name}")
+    print("Output Files:")
+    print(f"   Comprehensive Analysis: {main_save_path.name}")
+    print(f"   Denoising Comparison: {comparison_save_path.name}")
+    print(f"   STFT Comparison: {stft_save_path.name}")
+    
+    # 7. 保存降噪后的数据
+    denoised_data_path = None
+    if save_denoised_data:
+        print("\n7️⃣ 保存降噪后的数据...")
+        
+        # 创建降噪数据保存目录
+        denoised_data_dir = Path("./ppg_denoised_data")
+        denoised_data_dir.mkdir(exist_ok=True)
+        
+        # 创建数据源子目录
+        data_source = Path(txt_path).parent.name
+        if data_source.endswith('_data'):
+            data_source_name = data_source.replace('_data', '')
+        else:
+            data_source_name = data_source
+        
+        source_dir = denoised_data_dir / f"{data_source_name}_denoised"
+        source_dir.mkdir(exist_ok=True)
+        
+        # 保存降噪后的数据
+        denoised_filename = f"{base_name}_{channel}_denoised_{best_method}.txt"
+        denoised_data_path = source_dir / denoised_filename
+        
+        # 准备保存的数据：时间轴 + 降噪后的信号
+        time_column = time_axis.reshape(-1, 1)
+        denoised_column = ppg_best_denoised.reshape(-1, 1)
+        data_to_save = np.hstack([time_column, denoised_column])
+        
+        # 保存数据
+        np.savetxt(denoised_data_path, data_to_save, 
+                  fmt='%.6f', delimiter='\t',
+                  header=f'Time(s)\t{channel.upper()}_denoised_{best_method}',
+                  comments='')
+        
+        print(f"   ✅ 降噪数据已保存: {denoised_data_path}")
+        print(f"   📊 数据格式: 时间(秒) | {channel.upper()}通道降噪信号")
+        print(f"   🔧 降噪方法: {best_method}")
+        print(f"   📈 数据点数: {len(ppg_best_denoised)}")
+        print(f"   ⏱️ 时长: {time_axis[-1]:.1f} 秒")
+    
     print("="*70)
     
     return {
@@ -395,39 +459,167 @@ def advanced_ppg_analysis(txt_path, channel='green', save_dir=None):
         'save_paths': {
             'main': main_save_path,
             'comparison': comparison_save_path,
-            'stft': stft_save_path
+            'stft': stft_save_path,
+            'denoised_data': denoised_data_path
         }
     }
 
-def main():
-    """主函数"""
-    if len(sys.argv) > 1:
-        txt_path = sys.argv[1]
-        channel = sys.argv[2] if len(sys.argv) > 2 else 'green'
-        save_dir = sys.argv[3] if len(sys.argv) > 3 else None
-    else:
-        # 默认参数
-        txt_path = './hyx_data/喉咙-吞咽6次间隔10秒.txt'
-        channel = 'green'
-        save_dir = './ppg_analysis_results'
-        print("🚀 使用默认参数运行高级分析...")
+def batch_process_data_directories(data_pattern="*_data", channels=['green', 'ir', 'red'], save_dir="./ppg_analysis_results", save_denoised_data=True):
+    """
+    Batch process all txt files in directories matching the pattern
+    Args:
+        data_pattern: Pattern to match data directories (default: "*_data")
+        channels: List of PPG channels to process (default: ['green', 'ir', 'red'])
+        save_dir: Base directory to save results
+        save_denoised_data: Whether to save denoised data (default: True)
+    """
+    print("="*80)
+    print("PPG Signal Batch Analysis")
+    print("="*80)
     
-    # 检查文件
-    if not os.path.exists(txt_path):
-        print(f"❌ 文件不存在: {txt_path}")
+    # Find all matching directories
+    data_dirs = glob.glob(data_pattern)
+    if not data_dirs:
+        print(f"❌ No directories found matching pattern: {data_pattern}")
         return
     
-    try:
-        result = advanced_ppg_analysis(txt_path, channel, save_dir)
-        if result:
-            print("\n🎉 PPG信号高级分析完成！")
-            print("📊 查看生成的图像文件了解详细结果")
+    print(f"📁 Found {len(data_dirs)} data directories:")
+    for dir_path in data_dirs:
+        print(f"   - {dir_path}")
+    
+    # Create base save directory
+    base_save_path = Path(save_dir)
+    base_save_path.mkdir(exist_ok=True)
+    print(f"📂 Base results directory: {base_save_path.resolve()}")
+    
+    total_files = 0
+    processed_files = 0
+    failed_files = 0
+    
+    # Process each directory
+    for data_dir in data_dirs:
+        data_dir_name = Path(data_dir).name
+        print(f"\n📂 Processing directory: {data_dir}")
+        
+        # Create specific results directory for this data directory
+        # Convert xxx_data to xxx_results
+        if data_dir_name.endswith('_data'):
+            results_dir_name = data_dir_name.replace('_data', '_results')
         else:
-            print("\n❌ 分析失败")
-    except Exception as e:
-        print(f"\n💥 分析过程出错: {e}")
-        import traceback
-        traceback.print_exc()
+            results_dir_name = f"{data_dir_name}_results"
+        
+        data_save_path = base_save_path / results_dir_name
+        data_save_path.mkdir(exist_ok=True)
+        print(f"📂 Results for {data_dir_name} will be saved to: {data_save_path.resolve()}")
+        
+        # Find all txt files in the directory
+        txt_files = list(Path(data_dir).glob("*.txt"))
+        if not txt_files:
+            print(f"   ⚠️ No .txt files found in {data_dir}")
+            continue
+        
+        print(f"   📄 Found {len(txt_files)} .txt files")
+        total_files += len(txt_files)
+        
+        # Process each file
+        for txt_file in txt_files:
+            print(f"\n   🔍 Processing: {txt_file.name}")
+            
+            # Check available channels for this file
+            available_channels = check_available_channels(str(txt_file))
+            print(f"   📊 Available channels: {', '.join(available_channels)}")
+            
+            # Process each requested channel that's available
+            for channel in channels:
+                if channel not in available_channels:
+                    print(f"   ⚠️ Skipping {channel.upper()} channel (not available)")
+                    continue
+                    
+                try:
+                    # Create subdirectory for this file within the data-specific results directory
+                    file_save_dir = data_save_path / txt_file.stem
+                    file_save_dir.mkdir(exist_ok=True)
+                    
+                    result = advanced_ppg_analysis(str(txt_file), channel, str(file_save_dir), save_denoised_data)
+                    if result:
+                        processed_files += 1
+                        print(f"   ✅ {channel.upper()} channel processed successfully")
+                    else:
+                        failed_files += 1
+                        print(f"   ❌ {channel.upper()} channel processing failed")
+                        
+                except Exception as e:
+                    failed_files += 1
+                    print(f"   💥 Error processing {channel.upper()} channel: {e}")
+    
+    # Summary
+    print("\n" + "="*80)
+    print("BATCH PROCESSING SUMMARY")
+    print("="*80)
+    print(f"Total files found: {total_files}")
+    print(f"Successfully processed: {processed_files}")
+    print(f"Failed: {failed_files}")
+    print(f"Success rate: {processed_files/total_files*100:.1f}%" if total_files > 0 else "N/A")
+    print(f"Base results directory: {base_save_path.resolve()}")
+    print("\n📁 Generated results directories:")
+    for data_dir in data_dirs:
+        data_dir_name = Path(data_dir).name
+        if data_dir_name.endswith('_data'):
+            results_dir_name = data_dir_name.replace('_data', '_results')
+        else:
+            results_dir_name = f"{data_dir_name}_results"
+        results_path = base_save_path / results_dir_name
+        if results_path.exists():
+            file_count = len(list(results_path.rglob("*.png")))
+            print(f"   - {results_dir_name}/ ({file_count} images)")
+    print("="*80)
+
+
+def main():
+    """Main function with batch processing capability"""
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "--batch":
+            # Batch processing mode
+            data_pattern = sys.argv[2] if len(sys.argv) > 2 else "*_data"
+            channels = sys.argv[3].split(',') if len(sys.argv) > 3 else ['green', 'ir', 'red']
+            save_dir = sys.argv[4] if len(sys.argv) > 4 else "./ppg_analysis_results"
+            save_denoised_data = sys.argv[5].lower() != 'false' if len(sys.argv) > 5 else True
+            
+            print("🚀 Starting batch processing...")
+            batch_process_data_directories(data_pattern, channels, save_dir, save_denoised_data)
+        else:
+            # Single file processing mode
+            txt_path = sys.argv[1]
+            channel = sys.argv[2] if len(sys.argv) > 2 else 'green'
+            save_dir = sys.argv[3] if len(sys.argv) > 3 else None
+            
+            # Check file
+            if not os.path.exists(txt_path):
+                print(f"❌ File does not exist: {txt_path}")
+                return
+            
+            try:
+                result = advanced_ppg_analysis(txt_path, channel, save_dir)
+                if result:
+                    print("\n🎉 PPG signal advanced analysis completed!")
+                    print("📊 Check the generated image files for detailed results")
+                else:
+                    print("\n❌ Analysis failed")
+            except Exception as e:
+                print(f"\n💥 Error during analysis: {e}")
+                import traceback
+                traceback.print_exc()
+    else:
+        # Default: batch processing of all *_data directories
+        print("🚀 Running batch analysis on all *_data directories...")
+        print("Usage examples:")
+        print("  python ppg_advanced_analysis.py --batch")
+        print("  python ppg_advanced_analysis.py --batch '*_data' 'green,ir,red'")
+        print("  python ppg_advanced_analysis.py --batch '*_data' 'green' './my_results'")
+        print("  python ppg_advanced_analysis.py --batch '*_data' 'green' './my_results' 'false'  # 不保存降噪数据")
+        print("  python ppg_advanced_analysis.py single_file.txt green")
+        print()
+        batch_process_data_directories()
 
 if __name__ == "__main__":
     main()

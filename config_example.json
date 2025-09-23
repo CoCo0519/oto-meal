@@ -6,31 +6,34 @@
   "patience": 15,
   "k_folds": 5,
   "test_size": 0.2,
-  "model_types": ["cnn", "transformer", "fusion"],
+  "model_types": [
+    "cnn",
+    "transformer",
+    "fusion"
+  ],
   "use_class_weights": true,
   "augmentation": true,
-  "feature_types": ["stft", "time_series"],
-  
+  "feature_types": [
+    "stft",
+    "time_series"
+  ],
   "_comment_model_params": "模型相关参数",
   "cnn_params": {
     "dropout": 0.1,
     "use_attention": true
   },
-  
   "transformer_params": {
     "d_model": 512,
     "num_heads": 8,
     "num_layers": 6,
     "dropout": 0.1
   },
-  
   "fusion_params": {
     "d_model": 512,
     "num_heads": 8,
     "num_transformer_layers": 4,
     "dropout": 0.1
   },
-  
   "_comment_data_params": "数据处理参数",
   "data_params": {
     "window_size": 5.0,
@@ -38,7 +41,6 @@
     "fs": 100,
     "normalize_features": true
   },
-  
   "_comment_feature_params": "特征提取参数",
   "feature_params": {
     "stft": {
@@ -51,18 +53,23 @@
       "n_mels": 26
     }
   },
-  
   "_comment_detection_params": "行为检测参数",
   "detection_params": {
     "cough": {
       "energy_threshold_multiplier": 2.0,
       "min_interval_sec": 2.0,
-      "event_duration": [0.5, 1.0]
+      "event_duration": [
+        0.5,
+        1.0
+      ]
     },
     "swallow": {
       "combined_threshold_multiplier": 1.5,
       "min_interval_sec": 3.0,
-      "event_duration": [1.0, 2.0]
+      "event_duration": [
+        1.0,
+        2.0
+      ]
     },
     "chew": {
       "activity_threshold_multiplier": 0.8,
@@ -70,7 +77,6 @@
       "active_ratio_threshold": 0.6
     }
   },
-  
   "_comment_training_params": "训练相关参数",
   "training_params": {
     "optimizer": "adamw",
@@ -80,20 +86,31 @@
     "focal_loss_alpha": 1.0,
     "focal_loss_gamma": 2.0
   },
-  
   "_comment_behavior_labels": "行为标签映射",
   "behavior_labels": {
     "rest": 0,
-    "chew": 1, 
+    "chew": 1,
     "cough": 2,
     "swallow": 3
   },
-  
   "_comment_output_params": "输出相关参数",
   "output_params": {
     "save_models": true,
     "save_features": true,
     "generate_plots": true,
     "save_predictions": true
+  },
+  "data_glob": "./*_data",
+  "merge_strategy": "copy",
+  "dataloader_params": {
+    "num_workers": "auto_half_cores",
+    "pin_memory": true,
+    "persistent_workers": true,
+    "prefetch_factor": 2
+  },
+  "gpu_params": {
+    "enable_tf32": true,
+    "cudnn_benchmark": true,
+    "matmul_precision": "high"
   }
 }

@@ -1,0 +1,17 @@
+{
+  "data_dir": "./hyx_data",
+  "model_types": [
+    "fusion"
+  ],
+  "dataloader_params": {
+    "num_workers": 14,
+    "pin_memory": true,
+    "persistent_workers": true,
+    "prefetch_factor": 2
+  },
+  "gpu_params": {
+    "enable_tf32": true,
+    "cudnn_benchmark": true,
+    "matmul_precision": "high"
+  }
+}
