@@ -2,701 +2,798 @@
 # -*- coding: utf-8 -*-
 """
 run_behavior_classification.py
-统一入口（修复+优化版）
-- 先解析 CLI/设置 CUDA_VISIBLE_DEVICES，再做后端优化与日志
-- 自检：GPU/AMP 正常；未装 Triton 时自动跳过 torch.compile 测试
-- DataLoader 参数更稳健（仅在 num_workers>0 时设置 prefetch_factor）
-- 兼容老旧模块：可选注入 torch/optim/nn/F（行为模块现在已修复为显式 import，不再依赖注入）
+JSON-only windowing + Multi-modal (PPG3+IMU3) CNN+Transformer training
+with stratified split, large-scale evaluation, and optional K-fold CV.
+
+Key features
+- STRICT JSON slicing: uses event_starts_sec, event_duration_sec, total_duration_sec
+  Hz = #rows / total_duration_sec; logs: start/duration → [row_start:row_end) & Hz.
+- Data layout:
+    outdir/
+      windows/sample_*.npy        # single copy of all windows
+      all_labels.json             # all windows with rel_path to windows/
+      train/labels.json           # stratified split view (rel_path to windows/)
+      val/labels.json
+- Trainer: dual-branch CNN (PPG/IMU) → fusion (1x1 conv) → Transformer → classifier.
+  Long training, cosine LR + warmup, AdamW, AMP, data augmentation, early stopping, class weights.
+- Evaluation:
+    --eval-set {val,all}  (default val)  # confusion matrix/accuracy on chosen set
+    --cv-folds K                         # optional K-fold CV (aggregated confusion + accuracies)
+- Outputs:
+    _simple_outputs/training_accuracy.png
+    _simple_outputs/training_metrics.json
+    _simple_outputs/confusion_matrix.png
+    _simple_outputs/confusion_matrix.json
+    _simple_outputs/best_model.pt
+    (if CV) _simple_outputs/cv_metrics.json, confusion_matrix_cv.png/json
 """
 
 from __future__ import annotations
-
-import os
-import sys
-import json
-import glob
-import shutil
 import argparse
-import platform
-from datetime import datetime
-import traceback
+import json
+import os
+import random
 from pathlib import Path
-import importlib
-import warnings
+from typing import List, Dict, Tuple, Optional
+import shutil
+import math
+import fnmatch
+import numpy as np
 
-# --------------------------- CLI 构建 ---------------------------
-
+# ---------------- CLI ----------------
 def build_arg_parser():
-    parser = argparse.ArgumentParser(
-        description="行为分类训练/推理统一入口（支持 *_data 多目录）",
-        formatter_class=argparse.RawTextHelpFormatter,
-        epilog=(
-            "示例：\n"
-            "  %(prog)s --quick-start                   # 快速跑一遍（等价于特征提取）\n"
-            "  %(prog)s --full-pipeline                 # 运行完整训练流水线\n"
-            "  %(prog)s --data-only                     # 仅数据标注/准备\n"
-            "  %(prog)s --feature-only                  # 仅特征提取\n"
-            "  %(prog)s --models cnn transformer        # 指定模型类型\n"
-            "  %(prog)s --config config_example.json    # 使用配置文件\n"
-            "  %(prog)s --data-glob \"./*_data\"          # 使用所有 *_data 目录\n"
-            "\n"
-            "GPU优化示例：\n"
-            "  %(prog)s --test-gpu                           # 测试GPU功能\n"
-            "  %(prog)s --full-pipeline --mixed-precision    # 启用混合精度训练\n"
-            "  %(prog)s --full-pipeline --batch-size 64       # 自定义批次大小\n"
-            "  %(prog)s --full-pipeline --gpu-id 0            # 指定GPU设备\n"
-            "  %(prog)s --full-pipeline --gpu-memory-fraction 0.8  # 限制GPU内存使用\n"
-            "  %(prog)s --full-pipeline --no-gpu              # 强制使用CPU\n"
-        )
-    )
+    ap = argparse.ArgumentParser(description="JSON-only windowing & multi-modal training (Windows-friendly)")
+    ap.add_argument("--data-dir", type=str, required=True, help="Root folder containing *_denoise.txt")
+    ap.add_argument("--event-config", type=str, required=True, help="Path to events_config.json")
+    ap.add_argument("--pattern", type=str, default="*_denoise.txt", help="Glob pattern (default *_denoise.txt)")
 
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument('--quick-start', action='store_true', help='快速运行（默认走特征提取）')
-    mode.add_argument('--full-pipeline', action='store_true', help='运行完整训练流水线')
-    mode.add_argument('--data-only', action='store_true', help='仅数据标注/准备')
-    mode.add_argument('--feature-only', action='store_true', help='仅特征提取')
+    ap.add_argument("--ear-only", action="store_true", default=True,
+                    help="Train on '耳道' files only (default True)")
+    ap.add_argument("--use-throat", action="store_true",
+                    help="Also include '喉咙' in training (default False)")
+    ap.add_argument("--val-ratio", type=float, default=0.2, help="Validation ratio (default 0.2)")
+    ap.add_argument("--stratified", action="store_true", default=True, help="Stratified split by label (default on)")
+    ap.add_argument("--no-stratified", dest="stratified", action="store_false")
+    ap.add_argument("--eval-set", type=str, choices=["val", "all"], default="val",
+                    help="Which set to evaluate confusion matrix on (default: val)")
+    ap.add_argument("--cv-folds", type=int, default=0,
+                    help="K-fold cross validation (K>1). When set, ignores --val-ratio and --eval-set uses CV val.")
 
-    parser.add_argument('--data-dir', type=str, default='./hyx_data', help='数据目录路径 (默认: ./hyx_data)')
-    parser.add_argument('--data-glob', type=str, default=None, help='数据目录通配符，例如 \"./*_data\"（将自动合并其下所有 .txt）')
-    parser.add_argument('--merge-strategy', type=str, default='copy', choices=['copy', 'link'], help='合并数据时策略：copy/硬链接(link)。Windows 上推荐 copy。')
-    parser.add_argument('--models', nargs='+', default=['fusion'], help='指定模型类型列表，例如: --models cnn transformer fusion')
-    parser.add_argument('--config', type=str, default=None, help='配置 JSON 文件路径（可包含 data_glob/dataloader/gpu 等参数）')
+    ap.add_argument("--seed", type=int, default=2025, help="Random seed")
+    ap.add_argument("--outdir", type=str, default="./_prepared_events", help="Output dir")
 
-    # GPU 相关
-    parser.add_argument('--no-gpu', action='store_true', help='禁用GPU加速')
-    parser.add_argument('--gpu-id', type=int, default=None, help='指定使用的GPU设备ID')
-    parser.add_argument('--batch-size', type=int, default=None, help='批次大小（GPU模式下会自动优化）')
-    parser.add_argument('--mixed-precision', action='store_true', help='启用混合精度训练（自动检测GPU支持）')
-    parser.add_argument('--no-mixed-precision', action='store_true', help='禁用混合精度训练')
-    parser.add_argument('--gpu-memory-fraction', type=float, default=0.9, help='GPU内存使用比例 (0.1-1.0, 默认0.9)')
-    parser.add_argument('--test-gpu', action='store_true', help='仅测试GPU功能，不运行训练')
+    # training options
+    ap.add_argument("--batch-size", type=int, default=128, help="Batch size")
+    ap.add_argument("--epochs", type=int, default=60, help="Epochs")
+    ap.add_argument("--lr", type=float, default=3e-4, help="Initial learning rate")
+    ap.add_argument("--weight-decay", type=float, default=1e-2, help="Weight decay for AdamW")
+    ap.add_argument("--warmup-pct", type=float, default=0.1, help="Warmup ratio of total steps")
+    ap.add_argument("--dropout", type=float, default=0.2, help="Dropout for Transformer")
+    ap.add_argument("--emb-dim", type=int, default=192, help="Embedding dim")
+    ap.add_argument("--nhead", type=int, default=8, help="Transformer num heads")
+    ap.add_argument("--nlayers", type=int, default=4, help="Transformer num encoder layers")
+    ap.add_argument("--patience", type=int, default=10, help="Early stopping patience")
+    ap.add_argument("--aug", action="store_true", default=True, help="Enable data augmentation (default on)")
+    ap.add_argument("--no-aug", dest="aug", action="store_false")
+    return ap
 
-    # 开关：是否测试 torch.compile（Triton 缺失会失败）
-    parser.add_argument('--skip-compile-test', action='store_true', help='跳过 torch.compile 测试（未装 Triton 时建议开启）')
+# --------------- helpers ---------------
+def _ensure_dir(p: Path):
+    p.mkdir(parents=True, exist_ok=True)
 
-    return parser
+def _reset_outdir(p: Path):
+    if p.exists():
+        shutil.rmtree(p)
+    p.mkdir(parents=True, exist_ok=True)
 
-# --------------------------- GPU/环境工具 ---------------------------
+def _is_ear_file(name: str) -> bool:
+    return "耳道" in name
 
-def ensure_torch_cuda_build():
-    """确保为 CUDA 构建；若检测到 +cpu 版本，给出修复建议"""
-    try:
-        import torch
-        built_cuda = getattr(torch.version, 'cuda', None)
-        print(f"  Torch: {getattr(torch, '__version__', 'unknown')}  built cuda: {built_cuda or '[cpu build]'}")
-        if (not built_cuda) or ('cpu' in str(getattr(torch, '__version__', '')).lower()):
-            print("  ⚠️ 检测到 CPU 构建的 PyTorch。若期望使用 GPU，请卸载并安装 CUDA 版：")
-            print("     pip uninstall -y torch torchvision torchaudio")
-            print("     pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124")
-            return False
-        return True
-    except Exception as e:
-        print(f"  ⚠️ 无法检测 torch 构建类型：{e}")
-        return False
+def _locate_data_file(root: Path, fname: str) -> Optional[Path]:
+    """Robust locator (exact → denoise suffix variants → relaxed suffix)."""
+    cand = list(root.rglob(fname))
+    if cand:
+        return cand[0]
+    stem = fname[:-4] if fname.endswith(".txt") else fname
+    variants = [stem + "_denoise.txt"] if not stem.endswith("_denoise") else [stem[:-8] + ".txt"]
+    for v in variants:
+        cand = list(root.rglob(v))
+        if cand:
+            return cand[0]
+    tail = fname
+    patterns = [f"*{tail}", f"*{tail.replace('.txt','')}_denoise.txt"]
+    for ptn in patterns:
+        for fp in root.rglob("*.txt"):
+            if fnmatch.fnmatch(fp.name, ptn):
+                return fp
+    return None
 
-def setup_gpu_performance(precision: str = "high", mem_fraction: float | None = None):
-    """优化 PyTorch 后端以提升 GPU 利用率（若可用）"""
-    try:
-        import torch
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
-            if hasattr(torch, "set_float32_matmul_precision"):
-                torch.set_float32_matmul_precision(precision)
-            torch.cuda.empty_cache()
-            if mem_fraction is not None and hasattr(torch.cuda, 'set_per_process_memory_fraction'):
-                try:
-                    torch.cuda.set_per_process_memory_fraction(float(mem_fraction))
-                except Exception as e:
-                    print(f"  ⚠️ 设置每进程显存比例失败：{e}")
-            if 'CUDA_VISIBLE_DEVICES' in os.environ:
-                vis = os.environ['CUDA_VISIBLE_DEVICES']
-                if vis:
-                    try:
-                        torch.cuda.set_device(int(vis.split(',')[0]))
-                    except Exception:
-                        pass
-            print("✅ GPU 性能优化已启用（TF32/CuDNN/benchmarks）")
-        else:
+def _read_six_cols(fp: Path) -> List[List[float]]:
+    """Read first six numeric columns per line; skip malformed lines."""
+    rows: List[List[float]] = []
+    with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+        for ln in f:
+            s = ln.strip()
+            if not s or s.startswith("#"):
+                continue
+            parts = s.replace("\u3000"," ").split()
+            if len(parts) < 6:
+                continue
             try:
-                torch.set_num_threads(max(1, (os.cpu_count() or 2)//2))
-                print("⚠️ 使用 CPU 模式，已优化线程数")
-            except Exception:
-                pass
-    except ImportError:
-        print("⚠️ PyTorch 未安装，跳过 GPU 优化设置")
-    except Exception as e:
-        print(f"⚠️ GPU 性能优化设置失败：{e}")
-
-def get_gpu_info():
-    """获取详细的GPU信息"""
-    try:
-        import torch
-        if torch.cuda.is_available():
-            device_count = torch.cuda.device_count()
-            current_device = torch.cuda.current_device()
-            info = {'available': True, 'device_count': device_count, 'current_device': current_device, 'devices': []}
-            for i in range(device_count):
-                props = torch.cuda.get_device_properties(i)
-                cc = float(f"{props.major}.{props.minor}")
-                info['devices'].append({
-                    'id': i,
-                    'name': props.name,
-                    'memory_total': props.total_memory / (1024**3),
-                    'memory_allocated': torch.cuda.memory_allocated(i) / (1024**3),
-                    'memory_reserved': torch.cuda.memory_reserved(i) / (1024**3),
-                    'compute_capability': cc,
-                    'multiprocessor_count': props.multi_processor_count
-                })
-            return info
-        else:
-            return {'available': False}
-    except Exception as e:
-        print(f"⚠️ 获取GPU信息失败：{e}")
-        return {'available': False}
-
-def optimize_data_loading_for_gpu():
-    """为GPU训练优化数据加载参数"""
-    cpu_count = os.cpu_count() or 2
-    try:
-        import torch
-        if torch.cuda.is_available():
-            return {
-                'num_workers': min(cpu_count, 8),
-                'pin_memory': True,
-                'persistent_workers': True,
-                'prefetch_factor': 4,  # 仅当 num_workers>0 时有效
-                'drop_last': True
-            }
-        else:
-            return {
-                'num_workers': max(1, cpu_count // 2),
-                'pin_memory': False,
-                'persistent_workers': False,
-                'prefetch_factor': 2,
-                'drop_last': False
-            }
-    except Exception:
-        return {
-            'num_workers': 2,
-            'pin_memory': False,
-            'persistent_workers': False,
-            'prefetch_factor': 2,
-            'drop_last': False
-        }
-
-def log_gpu_environment():
-    """打印与 GPU/CPU 环境相关的信息"""
-    print("\n[环境信息]")
-    try:
-        import torch
-        print(f"  Python: {platform.python_version()}  Torch: {getattr(torch, '__version__', 'unknown')}")
-        ensure_torch_cuda_build()
-
-        gpu_info = get_gpu_info()
-        if gpu_info['available']:
-            d = gpu_info['devices'][gpu_info['current_device']]
-            cudnn_ver = getattr(torch.backends, 'cudnn', None)
-            cudnn_ver = getattr(cudnn_ver, 'version', lambda: None)()
-            print(f"  CUDA 可用 ✔  设备: {d['name']}")
-            print(f"  Compute Capability: {d['compute_capability']}")
-            print(f"  显存总量: {d['memory_total']:.1f} GiB  已分配: {d['memory_allocated']:.2f} GiB  已保留: {d['memory_reserved']:.2f} GiB")
-            print(f"  cuDNN 版本: {cudnn_ver}")
-            print(f"  cudnn.benchmark: {getattr(torch.backends.cudnn, 'benchmark', None)}")
-            print(f"  allow_tf32: {getattr(torch.backends.cuda.matmul, 'allow_tf32', None)}")
-            if hasattr(torch.cuda, 'amp'):
-                print("  ✅ 支持 AMP (自动混合精度)")
-        else:
-            print("  CUDA 不可用，使用 CPU")
-            print(f"  CPU 核心数: {os.cpu_count()}")
-    except ImportError:
-        print(f"  Python: {platform.python_version()}  Torch: 未安装")
-        print("  ⚠️ PyTorch 未安装，将使用 CPU 模式")
-        print(f"  CPU 核心数: {os.cpu_count()}")
-    except Exception as e:
-        print(f"⚠️ 环境信息打印失败：{e}")
-
-def create_gpu_optimized_config(user_args=None):
-    """创建GPU优化的训练配置（结合设备信息与 CLI 覆盖）"""
-    gpu_info = get_gpu_info()
-    base = {
-        'use_gpu': gpu_info['available'],
-        'mixed_precision': False,
-        'gradient_accumulation_steps': 1,
-        'gradient_clip_norm': 1.0,
-        'dataloader_params': optimize_data_loading_for_gpu(),
-        'device_id': 0,
-        'use_amp': False,
-        'compile_model': False
-    }
-
-    if gpu_info['available']:
-        d = gpu_info['devices'][gpu_info['current_device']]
-        vram = d['memory_total']
-        cc = d['compute_capability']
-
-        if vram >= 16:
-            base['batch_size'] = 64; base['mixed_precision'] = True; base['use_amp'] = True
-        elif vram >= 8:
-            base['batch_size'] = 32; base['mixed_precision'] = True; base['use_amp'] = True
-        elif vram >= 4:
-            base['batch_size'] = 16; base['mixed_precision'] = True; base['use_amp'] = True
-        else:
-            base['batch_size'] = 8;  base['mixed_precision'] = False; base['use_amp'] = False
-
-        base['use_tensor_cores'] = cc >= 7.0
-        base['compile_model'] = cc >= 7.0
-
-        if gpu_info['device_count'] > 1:
-            base['multi_gpu'] = True
-            base['device_count'] = gpu_info['device_count']
-            base['batch_size'] *= gpu_info['device_count']
-        else:
-            base['multi_gpu'] = False
-            base['device_count'] = 1
-    else:
-        base.update({
-            'batch_size': 8,
-            'mixed_precision': False,
-            'use_tensor_cores': False,
-            'multi_gpu': False,
-            'device_count': 1,
-            'use_amp': False,
-            'compile_model': False
-        })
-
-    if user_args is not None:
-        if user_args.batch_size is not None:
-            base['batch_size'] = user_args.batch_size
-        if user_args.mixed_precision:
-            base['mixed_precision'] = True; base['use_amp'] = True
-        if user_args.no_mixed_precision:
-            base['mixed_precision'] = False; base['use_amp'] = False
-        if user_args.gpu_id is not None:
-            base['device_id'] = user_args.gpu_id
-
-    dl = base['dataloader_params']
-    if not dl or dl.get('num_workers', 0) <= 0:
-        dl.pop('prefetch_factor', None)
-
-    return base
-
-def monitor_gpu_memory():
-    """监控GPU内存使用情况"""
-    try:
-        import torch
-        if torch.cuda.is_available():
-            allocated = torch.cuda.memory_allocated() / (1024**3)
-            reserved = torch.cuda.memory_reserved() / (1024**3)
-            total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-            print(f"  GPU内存: {allocated:.2f}GB / {reserved:.2f}GB / {total:.2f}GB (已用/保留/总量)")
-            if allocated / total > 0.9:
-                print("  ⚠️ GPU内存使用率过高，建议清理缓存")
-                import torch as _t; _t.cuda.empty_cache()
-                return True
-        return False
-    except Exception:
-        return False
-
-def _has_triton():
-    try:
-        import triton  # noqa: F401
-        return True
-    except Exception:
-        return False
-
-def test_gpu_functionality(skip_compile_test: bool = False):
-    """测试GPU功能是否正常工作"""
-    print("\n🧪 测试GPU功能...")
-    try:
-        import torch
-        if not torch.cuda.is_available():
-            print("❌ CUDA不可用，无法进行GPU测试")
-            return False
-
-        device = torch.device('cuda')
-        print(f"✅ 使用GPU设备: {torch.cuda.get_device_name()}")
-
-        x = torch.randn(1024, 1024, device=device)
-        y = torch.randn(1024, 1024, device=device)
-        _ = torch.matmul(x, y)
-        print("✅ GPU张量运算正常")
-
-        try:
-            if hasattr(torch.amp, 'autocast'):
-                with torch.amp.autocast('cuda'):
-                    x = torch.randn(512, 512, device=device)
-                    y = torch.randn(512, 512, device=device)
-                    _ = torch.matmul(x, y)
-                print("✅ 混合精度 (AMP) 正常")
-        except Exception as e:
-            print(f"⚠️ 混合精度测试失败: {e}")
-
-        try:
-            if not skip_compile_test and hasattr(torch, 'compile'):
-                if _has_triton():
-                    mdl = torch.nn.Linear(256, 128).to(device)
-                    cmpl = torch.compile(mdl)
-                    _ = cmpl(torch.randn(4, 256, device=device))
-                    print("✅ 模型编译 (torch.compile) 正常")
-                else:
-                    print("ℹ️ 未检测到 Triton，已跳过 torch.compile 测试（如需启用请安装 triton）")
-            elif skip_compile_test:
-                print("ℹ️ 按参数要求跳过 torch.compile 测试")
-            else:
-                print("ℹ️ 当前 PyTorch 不支持 torch.compile")
-        except Exception as e:
-            print(f"⚠️ 模型编译测试失败: {e}")
-
-        import torch as _t; _t.cuda.empty_cache()
-        print("✅ GPU功能测试完成")
-        return True
-    except ImportError:
-        print("❌ PyTorch 未安装，无法进行GPU测试")
-        return False
-    except Exception as e:
-        print(f"❌ GPU功能测试失败: {e}")
-        return False
-
-def setup_plot_fonts():
-    """为 matplotlib 配置中文字体与负号显示（若 matplotlib 可用）。"""
-    try:
-        import matplotlib
-        import matplotlib.pyplot as plt  # noqa: F401
-        for name in ["SimHei", "Microsoft YaHei", "Arial Unicode MS"]:
-            try:
-                matplotlib.rcParams['font.sans-serif'] = [name]
-                break
+                vals = [float(x.replace(",", ".")) for x in parts[:6]]
+                rows.append(vals)
             except Exception:
                 continue
+    return rows
+
+def _slice_by_time_series(rows: List[List[float]], total_sec: float, start_sec: float, dur_sec: float):
+    """
+    Convert [start_sec, start_sec+dur_sec) to index range using Hz = len(rows)/total_sec.
+    floor/ceil + clamp; ensure at least 2 samples when possible.
+    Returns: (rows_slice, hz, st_idx, ed_idx) or None
+    """
+    if total_sec is None or total_sec <= 0 or dur_sec is None or dur_sec <= 0:
+        return None
+    n = len(rows)
+    if n == 0:
+        return None
+    hz = float(n) / float(total_sec)
+    eps = 1e-9
+    st_time = min(max(0.0, float(start_sec)), float(total_sec) - eps)
+    ed_time = min(float(total_sec), float(start_sec) + float(dur_sec))
+    st = int(math.floor(st_time * hz))
+    ed = int(math.ceil(ed_time * hz))
+    st = max(0, min(st, n-1))
+    ed = max(st+1, min(ed, n))
+    if ed - st < 2 and n >= 2:
+        ed = min(n, st + 2)
+    if ed - st <= 1:
+        return None
+    return rows[st:ed], hz, st, ed
+
+def _setup_plot_fonts():
+    try:
+        import matplotlib
+        for name in ["Microsoft YaHei", "SimHei", "Arial Unicode MS"]:
+            matplotlib.rcParams['font.sans-serif'] = [name]
+            break
         matplotlib.rcParams['axes.unicode_minus'] = False
     except Exception:
         pass
 
-# --------------------------- 数据工具 ---------------------------
+# --------------- dataset build (JSON-only) ---------------
+def build_event_windows(
+    root: Path, config_json: Path,
+    ear_only: bool, use_throat: bool, outdir: Path
+) -> Tuple[List[dict], Dict[str,int]]:
+    """
+    Build ALL windows once into outdir/windows/*.npy
+    Return: all_labels (list of dict with rel_path, label_id, label_str, etc.), label_counts
+    """
+    _reset_outdir(outdir)
+    win_dir = outdir / "windows"
+    _ensure_dir(win_dir)
 
-def check_data_directory(data_dir: str) -> bool:
-    p = Path(data_dir)
-    if not p.exists() or not p.is_dir():
-        print(f"❌ 数据目录不存在：{p.resolve()}")
-        return False
-    txts = list(p.rglob("*.txt"))
-    if not txts:
-        print(f"❌ 数据目录中未找到 .txt 数据文件：{p.resolve()}")
-        return False
-    print(f"✅ 数据目录检查通过：{p.resolve()}（{len(txts)} 个 .txt）")
-    return True
+    with open(config_json, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+    file_cfgs = cfg.get("files", [])
 
-def gather_data_to_merged_dir(data_glob: str, merge_strategy: str = "copy") -> str:
-    merged = Path("./_merged_data")
-    if merged.exists():
-        shutil.rmtree(merged)
-    merged.mkdir(parents=True, exist_ok=True)
+    label2id = {"chew":0, "drink":1, "cough":2, "swallow":3, "talk":4, "other":5}
+    id2label = {v:k for k,v in label2id.items()}
 
-    folders = [Path(p) for p in glob.glob(data_glob) if Path(p).is_dir()]
-    if not folders:
-        print(f"❌ 未找到匹配的数据文件夹：{data_glob}")
-        return str(merged)
+    all_labels: List[dict] = []
+    label_counts = {k:0 for k in label2id.keys()}
+    skipped = 0
+    total_windows = 0
 
-    count = 0
-    for folder in folders:
-        for txt in folder.rglob("*.txt"):
-            dst = merged / f"{folder.name}__{txt.name}"
-            if merge_strategy == "link" and hasattr(os, 'link'):
-                try:
-                    os.link(txt, dst)
-                except Exception:
-                    shutil.copy2(txt, dst)
-            else:
-                shutil.copy2(txt, dst)
-            count += 1
+    print("\n========== JSON WINDOWING ==========")
+    idx = 0
+    for item in file_cfgs:
+        fname = item.get("file")
+        label = (item.get("label") or "other").lower()
+        y = label2id.get(label, label2id["other"])
+        starts = item.get("event_starts_sec") or []
+        dur = item.get("event_duration_sec", None)
+        total = item.get("total_duration_sec", None)
 
-    print(f"✅ 已收集 {count} 个 .txt 文件到 {merged.resolve()}")
-    return str(merged)
+        if ear_only and (not _is_ear_file(fname)):
+            if not use_throat:
+                continue
 
-# --------------------------- （可选）行为模块注入 ---------------------------
+        fp = _locate_data_file(root, fname)
+        if fp is None:
+            print(f"[WARN] file not found: {fname}")
+            continue
 
-def patch_behavior_module_symbols(mod):
-    """老代码兜底：把 optim/nn/F/torch 注入到模块命名空间（新版本已显式 import，不再依赖）"""
+        rows = _read_six_cols(fp)
+        if not rows:
+            print(f"[WARN] empty or bad rows: {fp.name}")
+            continue
+
+        if not starts or dur is None or total is None:
+            print(f"[WARN] missing json fields: {fp.name}")
+            continue
+
+        print(f"[FILE] {fp.name}  label={label}  rows={len(rows)}  total_sec={total}")
+        for st in starts:
+            ret = _slice_by_time_series(rows, float(total), float(st), float(dur))
+            if ret is None:
+                print(f"  [WARN] skip window start={st:.2f}s dur={float(dur):.2f}s (too short after clamping)")
+                continue
+            win_rows, hz, st_idx, ed_idx = ret
+            arr = np.asarray(win_rows, dtype=np.float32).transpose(1, 0)  # [6,T]
+            idx += 1
+            rel_path = f"windows/sample_{idx:06d}.npy"
+            np.save(outdir / rel_path, arr)
+            rec = {
+                "rel_path": rel_path,
+                "label_id": int(y),
+                "label_str": id2label[int(y)],
+                "source_file": fp.name,
+                "start_sec": float(st),
+                "duration_sec": float(dur),
+                "row_start": int(st_idx),
+                "row_end": int(ed_idx),
+                "channels": 6,
+                "length": int(arr.shape[1])
+            }
+            all_labels.append(rec)
+            label_counts[id2label[int(y)]] += 1
+            total_windows += 1
+            print(f"  [JSON] start={st:.2f}s dur={float(dur):.2f}s -> rows [{st_idx}:{ed_idx}) len={ed_idx - st_idx}  Hz={hz:.2f}")
+    print(f"========== TOTAL WINDOWS: {total_windows} ==========\n")
+
+    with open(outdir / "all_labels.json", "w", encoding="utf-8") as f:
+        json.dump(all_labels, f, ensure_ascii=False, indent=2)
+
+    print("[INFO] Windows per label:", {k:int(v) for k,v in label_counts.items()})
+    return all_labels, {k:int(v) for k,v in label_counts.items()}
+
+def _stratified_split(all_labels: List[dict], val_ratio: float, seed: int) -> Tuple[List[dict], List[dict]]:
+    """Simple stratified split by label_id."""
+    rnd = random.Random(seed)
+    buckets: Dict[int, List[dict]] = {}
+    for r in all_labels:
+        buckets.setdefault(int(r["label_id"]), []).append(r)
+    train, val = [], []
+    for _, lst in buckets.items():
+        rnd.shuffle(lst)
+        n = len(lst)
+        n_val = int(round(n * val_ratio))
+        val.extend(lst[:n_val])
+        train.extend(lst[n_val:])
+    rnd.shuffle(train); rnd.shuffle(val)
+    return train, val
+
+def _save_split(outdir: Path, split_name: str, split_labels: List[dict]):
+    split_dir = outdir / split_name
+    _ensure_dir(split_dir)
+    with open(split_dir / "labels.json", "w", encoding="utf-8") as f:
+        json.dump(split_labels, f, ensure_ascii=False, indent=2)
+
+# --------------- plotting ---------------
+def _setup_fonts_and_plot():
+    _setup_plot_fonts()
     try:
-        import torch
-        import torch.optim as optim
-        import torch.nn as nn
-        import torch.nn.functional as F
-        for name, obj in [('optim', optim), ('nn', nn), ('F', F), ('torch', torch)]:
-            if not hasattr(mod, name):
-                setattr(mod, name, obj)
-    except Exception as e:
-        print(f"⚠️ 注入 torch 符号失败：{e}")
-
-# --------------------------- 子流程 ---------------------------
-
-def run_data_labeling_only(data_dir: str) -> bool:
-    print("\n" + "="*50)
-    print("仅运行数据标注 / 基础处理")
-    print("="*50)
-
-    if not check_data_directory(data_dir):
-        return False
-
-    try:
-        mod = importlib.import_module('behavior_classification_system')
-        patch_behavior_module_symbols(mod)
-        classification_main = getattr(mod, 'main')
-
-        original_argv = sys.argv.copy()
-        try:
-            sys.argv = ['behavior_classification_system.py', '--data-dir', data_dir, '--feature-only']
-            classification_main()
-        except SystemExit:
-            try:
-                sys.argv = ['behavior_classification_system.py', '--data_dir', data_dir, '--feature-only']
-                classification_main()
-            except SystemExit:
-                sys.argv = ['behavior_classification_system.py', '--data-dir', data_dir]
-                classification_main()
-        finally:
-            sys.argv = original_argv
-        print("✅ 数据标注/基础处理完成")
-        return True
-    except Exception as e:
-        print(f"❌ 数据标注/基础处理失败: {e}")
-        traceback.print_exc()
-        return False
-
-def run_feature_extraction_only(data_dir: str) -> bool:
-    print("\n" + "="*50)
-    print("仅运行特征提取")
-    print("="*50)
-
-    if not check_data_directory(data_dir):
-        return False
-
-    try:
-        mod = importlib.import_module('behavior_classification_system')
-        patch_behavior_module_symbols(mod)
-        classification_main = getattr(mod, 'main')
-
-        original_argv = sys.argv.copy()
-        try:
-            sys.argv = ['behavior_classification_system.py', '--data-dir', data_dir, '--data-only']
-            classification_main()
-        except SystemExit:
-            try:
-                sys.argv = ['behavior_classification_system.py', '--data_dir', data_dir, '--data-only']
-                classification_main()
-            except SystemExit:
-                sys.argv = ['behavior_classification_system.py', '--data-dir', data_dir]
-                classification_main()
-        finally:
-            sys.argv = original_argv
-        print("✅ 特征提取完成")
-        return True
-    except Exception as e:
-        print(f"❌ 特征提取失败: {e}")
-        traceback.print_exc()
-        return False
-
-def run_simple_cpu_training(data_dir: str, models: list[str], config: dict, args=None) -> bool:
-    print("\n" + "="*50)
-    print("运行简化CPU训练模式")
-    print("="*50)
-
-    if not check_data_directory(data_dir):
-        return False
-
-    try:
-        print("📊 开始数据预处理...")
-        data_files = list(Path(data_dir).rglob("*.txt"))
-        print(f"找到 {len(data_files)} 个数据文件")
-
-        total_samples = 0
-        for file_path in data_files:
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
-                    total_samples += len(lines)
-                    print(f"  {file_path.name}: {len(lines)} 行数据")
-            except Exception as e:
-                print(f"  ⚠️ 读取 {file_path.name} 失败: {e}")
-
-        print(f"📈 数据统计:")
-        print(f"  - 总文件数: {len(data_files)}")
-        print(f"  - 总样本数: {total_samples}")
-        print(f"  - 平均每文件: {total_samples/len(data_files):.1f} 样本")
-
-        report_path = f"simple_analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-        with open(report_path, 'w', encoding='utf-8') as f:
-            f.write("简化CPU训练分析报告\n")
-            f.write("="*50 + "\n")
-            f.write(f"数据目录: {data_dir}\n")
-            f.write(f"分析时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"总文件数: {len(data_files)}\n")
-            f.write(f"总样本数: {total_samples}\n")
-            f.write(f"平均每文件: {total_samples/len(data_files):.1f} 样本\n\n")
-            f.write("文件列表:\n")
-            for file_path in data_files:
-                f.write(f"  - {file_path.name}\n")
-
-        print(f"📄 分析报告已保存: {report_path}")
-        print("✅ 简化CPU训练完成")
-        print("\n💡 提示: 要使用完整的GPU训练功能，请安装 PyTorch CUDA 构建：")
-        print("   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124")
-        return True
-
-    except Exception as e:
-        print(f"❌ 简化CPU训练失败: {e}")
-        traceback.print_exc()
-        return False
-
-def run_full_pipeline(data_dir: str, models: list[str], config: dict, args=None) -> bool:
-    print("\n" + "="*50)
-    print("运行完整训练流水线")
-    print("="*50)
-
-    if not check_data_directory(data_dir):
-        return False
-
-    try:
-        import torch
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
-            if hasattr(torch, "set_float32_matmul_precision"):
-                torch.set_float32_matmul_precision("high")
-    except ImportError:
-        print("⚠️ PyTorch 未安装，跳过GPU优化")
+        import matplotlib.pyplot as plt  # noqa
     except Exception:
         pass
 
+def _plot_curves(history: Dict[str, List[float]], out_png: Path):
+    _setup_fonts_and_plot()
     try:
-        from complete_training_pipeline import TrainingPipeline  # 按项目结构调整
-    except ImportError:
-        print("⚠️ complete_training_pipeline 模块未找到")
-        print("尝试使用简化的CPU模式...")
-        return run_simple_cpu_training(data_dir, models, config, args)
+        import matplotlib.pyplot as plt
+    except Exception:
+        print("⚠️ matplotlib not available; skip training curve")
+        return
+    epochs = list(range(1, max(
+        len(history.get("train_acc", [])),
+        len(history.get("val_acc", [])),
+        len(history.get("val_loss", []))) + 1))
+    plt.figure(figsize=(8,5))
+    if history.get("train_acc"): plt.plot(epochs[:len(history["train_acc"])], history["train_acc"], label="Train Acc")
+    if history.get("val_acc"): plt.plot(epochs[:len(history["val_acc"])], history["val_acc"], label="Val Acc")
+    if history.get("val_loss"): plt.plot(epochs[:len(history["val_loss"])], history["val_loss"], label="Val Loss")
+    if not (history.get("train_acc") or history.get("val_acc") or history.get("val_loss")):
+        plt.text(0.5, 0.5, "No history", ha="center", va="center")
+    plt.xlabel("Epoch"); plt.ylabel("Metric"); plt.legend(); plt.tight_layout()
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_png, dpi=150); plt.close()
 
-    gpu_cfg = create_gpu_optimized_config(args)
+def _plot_confusion_matrix(cm: List[List[int]], classes: List[str], out_png: Path, title="Confusion Matrix"):
+    _setup_fonts_and_plot()
+    try:
+        import matplotlib.pyplot as plt
+    except Exception:
+        print("⚠️ matplotlib not available; skip confusion matrix plot")
+        return
+    cm_arr = np.array(cm, dtype=float)
+    row_sum = cm_arr.sum(axis=1, keepdims=True) + 1e-9
+    cm_norm = cm_arr / row_sum
 
-    tmp = {
-        'data_dir': data_dir,
-        'model_types': models,
-        **gpu_cfg,
-        **{k: v for k, v in config.items() if k not in ('data_dir', 'model_types')}
+    plt.figure(figsize=(7,6))
+    im = plt.imshow(cm_norm, interpolation='nearest', aspect='auto')
+    plt.title(title)
+    plt.colorbar(im, fraction=0.046, pad=0.04)
+    tick_marks = range(len(classes))
+    plt.xticks(tick_marks, classes, rotation=45, ha='right')
+    plt.yticks(tick_marks, classes)
+    thresh = cm_norm.max() / 2.0 if cm_norm.size else 0.5
+    for i in range(len(classes)):
+        for j in range(len(classes)):
+            txt = f"{int(cm_arr[i, j])}\n({cm_norm[i, j]*100:.1f}%)"
+            plt.text(j, i, txt, ha="center", va="center",
+                     color="white" if cm_norm[i, j] > thresh else "black", fontsize=8)
+    plt.ylabel("True"); plt.xlabel("Pred")
+    plt.tight_layout()
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_png, dpi=150); plt.close()
+
+# --------------- trainer (multi-modal) ---------------
+def _compute_channel_stats_from_list(outdir: Path, labels: List[dict]) -> Dict[str, List[float]]:
+    """Compute per-channel mean/std using a list of items (train split)."""
+    sum_c = np.zeros(6, dtype=np.float64)
+    sumsq_c = np.zeros(6, dtype=np.float64)
+    n_total = np.zeros(6, dtype=np.float64)
+    for it in labels:
+        arr = np.load(outdir / it["rel_path"])  # [C,T]
+        sum_c += arr.sum(axis=1)
+        sumsq_c += (arr*arr).sum(axis=1)
+        n_total += arr.shape[1]
+    mean = sum_c / np.maximum(n_total, 1.0)
+    var = sumsq_c / np.maximum(n_total, 1.0) - mean*mean
+    std = np.sqrt(np.maximum(var, 1e-8))
+    stats = {"mean": mean.tolist(), "std": std.tolist()}
+    with open(outdir / "channel_stats.json", "w", encoding="utf-8") as f:
+        json.dump(stats, f, ensure_ascii=False, indent=2)
+    print(f"[INFO] Channel stats saved -> {outdir/'channel_stats.json'}")
+    return stats
+
+def _build_dataloaders(outdir: Path, train_labels: List[dict], val_labels: List[dict],
+                       batch_size: int, target_len: int, stats: Dict[str,List[float]],
+                       aug: bool):
+    import torch
+    from torch.utils.data import DataLoader
+
+    mean = np.array(stats["mean"], dtype=np.float32).reshape(6,1)
+    std  = np.array(stats["std"], dtype=np.float32).reshape(6,1)
+
+    def _augment(x: np.ndarray) -> np.ndarray:
+        T = x.shape[1]
+        max_shift = max(1, int(0.05 * T))
+        if max_shift > 1 and random.random() < 0.5:
+            s = random.randint(-max_shift, max_shift)
+            x = np.roll(x, s, axis=1)
+        if random.random() < 0.7:
+            scale = np.random.normal(1.0, 0.05, size=(6,1)).astype(np.float32)
+            x = x * scale
+        if random.random() < 0.7:
+            noise = np.random.normal(0.0, 0.01, size=x.shape).astype(np.float32)
+            x = x + noise
+        if random.random() < 0.3:
+            m = int(0.05 * T)
+            if m > 1:
+                start = random.randint(0, max(0, T - m))
+                x[:, start:start+m] = 0.0
+        return x
+
+    def _fix_len(x: np.ndarray, T: int) -> np.ndarray:
+        t = x.shape[1]
+        if t == T:
+            return x
+        if t > T:
+            st = (t - T) // 2
+            return x[:, st:st+T]
+        pad = T - t
+        left = pad // 2
+        right = pad - left
+        return np.pad(x, ((0,0),(left,right)), mode="constant")
+
+    class ListDataset(torch.utils.data.Dataset):
+        def __init__(self, items: List[dict], do_aug=False):
+            self.items = items
+            self.do_aug = do_aug
+        def __len__(self): return len(self.items)
+        def __getitem__(self, idx):
+            it = self.items[idx]
+            arr = np.load(outdir / it["rel_path"])  # [C,T]
+            T = target_len
+            if self.do_aug:
+                arr = _augment(arr.copy())
+            arr = _fix_len(arr, T)
+            arr = (arr - mean) / (std + 1e-8)
+            import torch
+            x = torch.from_numpy(arr).float()
+            y = int(it["label_id"])
+            return x, y
+
+    train_ds = ListDataset(train_labels, do_aug=aug)
+    val_ds   = ListDataset(val_labels,   do_aug=False)
+
+    train_ld = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
+                          drop_last=False, pin_memory=True)
+    val_ld   = DataLoader(val_ds, batch_size=batch_size, shuffle=False,
+                          drop_last=False, pin_memory=True)
+    return train_ld, val_ld
+
+def _build_model(n_classes: int, emb_dim: int, nhead: int, nlayers: int, dropout: float, device):
+    import torch
+    from torch import nn
+    class CNNFrontEnd(nn.Module):
+        def __init__(self, c_in=3, emb=192):
+            super().__init__()
+            self.net = nn.Sequential(
+                nn.Conv1d(c_in, 64, 9, padding=4), nn.ReLU(),
+                nn.Conv1d(64, 128, 9, padding=4), nn.ReLU(),
+                nn.MaxPool1d(2),
+                nn.Conv1d(128, emb, 9, padding=4), nn.ReLU(),
+            )
+        def forward(self, x):      # [B,C,T] -> [B,emb,T/2]
+            return self.net(x)
+
+    class PositionalEncoding(nn.Module):
+        def __init__(self, d_model, max_len=20000, dropout=0.0):
+            super().__init__()
+            self.dropout = nn.Dropout(dropout)
+            pe = torch.zeros(max_len, d_model)
+            position = torch.arange(0, max_len).unsqueeze(1)
+            div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+            pe[:, 0::2] = torch.sin(position * div_term)
+            pe[:, 1::2] = torch.cos(position * div_term)
+            pe = pe.unsqueeze(0)
+            self.register_buffer('pe', pe, persistent=False)
+        def forward(self, x):      # [B,T,D]
+            x = x + self.pe[:, :x.size(1), :]
+            return self.dropout(x)
+
+    class MultiModalModel(nn.Module):
+        def __init__(self, n_classes=6, emb=192, nhead=8, nlayers=4, dropout=0.2):
+            super().__init__()
+            self.ppg = CNNFrontEnd(3, emb)
+            self.imu = CNNFrontEnd(3, emb)
+            self.fuse = nn.Conv1d(emb*2, emb, 1)
+            enc_layer = nn.TransformerEncoderLayer(
+                d_model=emb, nhead=nhead, dim_feedforward=emb*2, dropout=dropout, batch_first=True)
+            self.tr = nn.TransformerEncoder(enc_layer, num_layers=nlayers)
+            self.pos = PositionalEncoding(emb, dropout=dropout)
+            self.cls = nn.Linear(emb, n_classes)
+        def forward(self, x):      # x:[B,6,T]
+            ppg = x[:, :3, :]
+            imu = x[:, 3:, :]
+            zp = self.ppg(ppg)         # [B,emb,T']
+            zi = self.imu(imu)         # [B,emb,T']
+            z = torch.cat([zp, zi], dim=1)
+            z = self.fuse(z)           # [B,emb,T']
+            z = z.transpose(1, 2)      # [B,T',emb]
+            z = self.pos(z)
+            z = self.tr(z)
+            z = z.mean(dim=1)
+            return self.cls(z)
+
+    model = MultiModalModel(n_classes=n_classes, emb=emb_dim, nhead=nhead, nlayers=nlayers, dropout=dropout).to(device)
+    return model
+
+def _train_eval_once(outdir: Path, train_labels: List[dict], val_labels: List[dict],
+                     classes: List[str], batch_size: int, epochs: int, lr: float,
+                     weight_decay: float, warmup_pct: float, emb_dim: int, nhead: int,
+                     nlayers: int, dropout: float, patience: int, aug: bool,
+                     seed: int, tag: str = "") -> Tuple[Dict, Dict, List[int], List[int]]:
+    """Train one model and return (history/metrics, best summary, y_true, y_pred)."""
+    try:
+        import torch
+        from torch import nn
+    except Exception:
+        out = outdir / "_simple_outputs"
+        _ensure_dir(out)
+        with open(out / f"training_metrics{('_'+tag if tag else '')}.json", "w", encoding="utf-8") as f:
+            json.dump({"trained": False, "reason": "torch not installed"}, f, ensure_ascii=False, indent=2)
+        return {"trained": False}, {"val_acc": None}, [], []
+
+    random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
+    if torch.cuda.is_available(): torch.cuda.manual_seed_all(seed)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    torch.backends.cudnn.benchmark = True
+
+    # target length by median over train+val
+    lengths = [it["length"] for it in (train_labels + val_labels)] or [256]
+    target_len = int(sorted(lengths)[len(lengths)//2])
+    print(f"[INFO] Target sequence length (median): {target_len}")
+
+    # stats from train
+    stats = _compute_channel_stats_from_list(outdir, train_labels)
+    train_ld, val_ld = _build_dataloaders(outdir, train_labels, val_labels, batch_size, target_len, stats, aug)
+
+    # classes & class weights
+    n_classes = len(classes)
+    cls_counts = np.zeros(n_classes, dtype=np.int64)
+    for it in train_labels: cls_counts[it["label_id"]] += 1
+    weights = cls_counts.sum() / np.maximum(cls_counts, 1)
+    weights = weights / weights.mean()
+    cls_weights = torch.tensor(weights, dtype=torch.float32, device=device)
+    print(f"[INFO] Class counts: {cls_counts.tolist()}  -> class weights: {weights.round(3).tolist()}")
+
+    model = _build_model(n_classes, emb_dim, nhead, nlayers, dropout, device)
+    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+    crt = torch.nn.CrossEntropyLoss(weight=cls_weights)
+
+    total_steps = max(1, epochs * max(1, len(train_ld)))
+    warmup_steps = int(total_steps * max(0.0, min(warmup_pct, 0.5)))
+    def lr_lambda(step):
+        if step < warmup_steps:
+            return float(step + 1) / float(max(1, warmup_steps))
+        progress = (step - warmup_steps) / float(max(1, total_steps - warmup_steps))
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+    scheduler = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda=lr_lambda)
+    scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
+
+    def _eval(loader):
+        model.eval()
+        tot, corr, loss_sum = 0, 0, 0.0
+        all_true, all_pred = [], []
+        with torch.no_grad():
+            for x,y in loader:
+                x = x.to(device); y = y.to(device)
+                with torch.cuda.amp.autocast(enabled=(device.type=="cuda")):
+                    logits = model(x)
+                    loss = crt(logits, y)
+                loss_sum += float(loss.item()) * x.size(0)
+                pred = logits.argmax(1)
+                corr += int((pred==y).sum().item())
+                tot += x.size(0)
+                all_true.extend(y.tolist()); all_pred.extend(pred.tolist())
+        acc = (corr/tot if tot else 0.0)
+        avg_loss = (loss_sum/tot if tot else 0.0)
+        return acc, avg_loss, all_true, all_pred
+
+    history = {"train_acc": [], "val_acc": [], "val_loss": []}
+    best_val = -1.0
+    out = outdir / "_simple_outputs"
+    _ensure_dir(out)
+    best_path = out / f"best_model{('_'+tag if tag else '')}.pt"
+    no_improve = 0; global_step = 0
+
+    for ep in range(1, epochs+1):
+        model.train()
+        for x,y in train_ld:
+            x = x.to(device); y = y.to(device)
+            opt.zero_grad(set_to_none=True)
+            with torch.cuda.amp.autocast(enabled=(device.type=="cuda")):
+                logits = model(x)
+                loss = crt(logits, y)
+            scaler.scale(loss).backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            scaler.step(opt); scaler.update(); scheduler.step()
+            global_step += 1
+        train_acc, _, _, _ = _eval(train_ld)
+        val_acc,  val_loss, _, _ = _eval(val_ld)
+        history["train_acc"].append(train_acc)
+        history["val_acc"].append(val_acc)
+        history["val_loss"].append(val_loss)
+        print(f"[{tag or 'run'}][{ep:02d}] train_acc={train_acc:.3f}  val_acc={val_acc:.3f}  val_loss={val_loss:.4f}  (lr={scheduler.get_last_lr()[0]:.2e})")
+        if val_acc > best_val + 1e-6:
+            best_val = val_acc; no_improve = 0
+            import torch as _t; _t.save(model.state_dict(), best_path)
+        else:
+            no_improve += 1
+            if no_improve >= patience:
+                print(f"[{tag or 'run'}][EarlyStop] No improvement for {patience} epochs. Stop at epoch {ep}.")
+                break
+
+    # load best and final eval on val_ld
+    import torch as _t
+    if best_path.exists():
+        model.load_state_dict(_t.load(best_path, map_location=device))
+    val_acc,  val_loss, y_true, y_pred = _eval(val_ld)
+
+    # save curves/metrics tag-aware
+    _plot_curves(history, out / f"training_accuracy{('_'+tag if tag else '')}.png")
+    metrics = {
+        "history": history,
+        "summary": {"val_acc": float(val_acc), "val_loss": float(val_loss)},
+        "best": {"val_acc": float(best_val)}
     }
-    if 'dataloader_params' in config:
-        tmp['dataloader_params'].update(config['dataloader_params'])
+    with open(out / f"training_metrics{('_'+tag if tag else '')}.json", "w", encoding="utf-8") as f:
+        json.dump(metrics, f, ensure_ascii=False, indent=2)
 
-    print(f"🚀 GPU优化配置:")
-    print(f"   - 使用GPU: {tmp['use_gpu']}")
-    print(f"   - 混合精度: {tmp['mixed_precision']}  (AMP: {tmp.get('use_amp', False)})")
-    print(f"   - 批次大小: {tmp['batch_size']}")
-    print(f"   - 设备ID: {tmp.get('device_id', 0)}")
-    print(f"   - 数据加载器workers: {tmp['dataloader_params']['num_workers']}")
-    pf = tmp['dataloader_params'].get('prefetch_factor', None)
-    print(f"   - 预取因子: {pf if pf is not None else '(未设置或无效)'}")
-    print(f"   - 模型编译优化: {tmp.get('compile_model', False)}")
-    if tmp.get('multi_gpu'):
-        print(f"   - 多GPU训练: {tmp['device_count']} 个GPU")
+    return metrics, {"val_acc": float(val_acc)}, y_true, y_pred
 
-    try:
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        config_path = f"./_auto_config_{ts}.json"
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(tmp, f, ensure_ascii=False, indent=2)
-
-        pipeline = TrainingPipeline(config_path)
-
-        if tmp['use_gpu']:
-            print("\n📊 训练前GPU状态:")
-            monitor_gpu_memory()
-
-        results = pipeline.run_complete_pipeline()
-
-        if tmp['use_gpu']:
-            print("\n🧹 训练后GPU清理:")
-            monitor_gpu_memory()
-
-        if os.path.exists(config_path):
-            os.remove(config_path)
-
-        print("✅ 完整训练流水线执行完成")
-        print(f"   结果保存在: {getattr(pipeline, 'output_dir', '[pipeline.output_dir 不可用]')}")
-        return True
-
-    except Exception as e:
-        print(f"❌ 训练流水线失败: {e}")
-        traceback.print_exc()
-        print("============================================================")
-        print("❌ 执行失败，请查看错误信息")
-        return False
-
-# --------------------------- 主入口 ---------------------------
-
+# --------------- main flow ---------------
 def main():
-    warnings.filterwarnings("ignore", category=FutureWarning)
+    args = build_arg_parser().parse_args()
+    random.seed(args.seed); np.random.seed(args.seed)
+    try:
+        import torch
+        torch.manual_seed(args.seed)
+        if torch.cuda.is_available(): torch.cuda.manual_seed_all(args.seed)
+    except Exception:
+        pass
 
-    parser = build_arg_parser()
-    args = parser.parse_args()
+    root = Path(args.data_dir)
+    if not root.exists():
+        print(f"❌ Data dir not found: {root.resolve()}"); raise SystemExit(1)
+    cfg_path = Path(args.event_config)
+    if not cfg_path.exists():
+        print(f"❌ events_config.json not found: {cfg_path.resolve()}"); raise SystemExit(1)
 
-    # 先处理 GPU 开关与可见设备，再进行后端优化
-    if args.no_gpu:
-        os.environ['CUDA_VISIBLE_DEVICES'] = ''
-        print("🚫 已禁用GPU加速")
-    elif args.gpu_id is not None:
-        os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu_id)
-        print(f"🎯 使用GPU设备: {args.gpu_id}")
+    outdir = Path(args.outdir)
+    all_labels, label_counts = build_event_windows(
+        root=root, config_json=cfg_path,
+        ear_only=not args.use_throat if args.ear_only else False,
+        use_throat=args.use_throat, outdir=outdir
+    )
+    if not all_labels:
+        print("❌ No windows built from JSON; please check your config.")
+        raise SystemExit(1)
 
-    setup_gpu_performance(precision="high", mem_fraction=None if args.no_gpu else args.gpu_memory_fraction)
-    log_gpu_environment()
+    # classes from mapping
+    label2id = {"chew":0,"drink":1,"cough":2,"swallow":3,"talk":4,"other":5}
+    id2label = {v:k for k,v in label2id.items()}
+    classes = [id2label[i] for i in range(len(id2label))]
+    print("[INFO] Total windows:", len(all_labels))
 
-    # 自检（可选跳过 compile 测试）
-    gpu_ok = True
-    if not args.no_gpu:
-        gpu_ok = test_gpu_functionality(skip_compile_test=args.skip_compile_test)
-        if not gpu_ok:
-            print("⚠️ GPU不可用，将使用CPU模式")
-            args.no_gpu = True
+    out_simple = outdir / "_simple_outputs"
+    _ensure_dir(out_simple)
 
-    setup_plot_fonts()
+    # --- K-fold CV path ---
+    if args.cv-folds if hasattr(args, 'cv-folds') else False:  # guard for hyphen attr
+        pass  # unreachable due to Python arg name, fixed below
 
-    # 加载配置文件（若提供）
-    config: dict = {}
-    if args.config:
-        try:
-            with open(args.config, "r", encoding="utf-8") as f:
-                config = json.load(f)
-        except Exception as e:
-            print(f"⚠️ 读取配置文件失败（将继续使用命令行参数）：{e}")
+    if args.cv_folds and args.cv_folds > 1:
+        K = int(args.cv_folds)
+        print(f"[CV] Running {K}-fold stratified cross-validation ...")
+        # build index buckets
+        buckets: Dict[int, List[int]] = {}
+        for i, r in enumerate(all_labels):
+            buckets.setdefault(int(r["label_id"]), []).append(i)
+        for lst in buckets.values():
+            random.shuffle(lst)
 
-    # 数据合并：优先 data_glob
-    actual_data_dir = args.data_dir
-    data_glob = args.data_glob or config.get("data_glob")
-    merge_strategy = args.merge_strategy or config.get("merge_strategy", "copy")
-    if data_glob:
-        print(f"🔎 通过通配符收集数据: {data_glob}")
-        actual_data_dir = gather_data_to_merged_dir(data_glob, merge_strategy)
+        # split indices into K folds per class
+        folds: List[List[int]] = [ [] for _ in range(K) ]
+        for cls, lst in buckets.items():
+            for i, idx in enumerate(lst):
+                folds[i % K].append(idx)
 
-    # 根据模式执行
-    ok = False
-    if args.test_gpu:
-        print("\n🧪 仅进行GPU功能测试...")
-        ok = test_gpu_functionality(skip_compile_test=args.skip_compile_test)
-    elif args.quick_start or args.feature_only:
-        ok = run_feature_extraction_only(actual_data_dir)
-    elif args.data_only:
-        ok = run_data_labeling_only(actual_data_dir)
-    elif args.full_pipeline:
-        ok = run_full_pipeline(actual_data_dir, args.models, config, args)
-    else:
-        print("\n⚠️ 未选择具体模式，建议使用 --quick-start 或 --full-pipeline。")
-        parser.print_help()
+        # run K folds
+        agg_cm = np.zeros((len(classes), len(classes)), dtype=int)
+        fold_metrics = []
+        for k in range(K):
+            val_idx = set(folds[k])
+            train_labels = [all_labels[i] for i in range(len(all_labels)) if i not in val_idx]
+            val_labels   = [all_labels[i] for i in sorted(val_idx)]
+            print(f"[CV] Fold {k+1}/{K}: train={len(train_labels)}  val={len(val_labels)}")
+
+            metrics, best, y_true, y_pred = _train_eval_once(
+                outdir, train_labels, val_labels, classes,
+                args.batch_size, args.epochs, args.lr, args.weight_decay, args.warmup_pct,
+                args.emb_dim, args.nhead, args.nlayers, args.dropout, args.patience,
+                args.aug, seed=args.seed + k, tag=f"cv{k+1}"
+            )
+            # confusion per fold
+            cm = np.zeros((len(classes), len(classes)), dtype=int)
+            for t,p in zip(y_true, y_pred):
+                if 0 <= t < len(classes) and 0 <= p < len(classes):
+                    cm[t,p] += 1
+            agg_cm += cm
+            fold_metrics.append({"fold": k+1, "val_acc": best["val_acc"], "val_samples": int(cm.sum())})
+
+        # save aggregated confusion & metrics
+        _plot_confusion_matrix(agg_cm.tolist(), classes, out_simple / "confusion_matrix_cv.png", title="Confusion Matrix (CV aggregated)")
+        with open(out_simple / "confusion_matrix_cv.json", "w", encoding="utf-8") as f:
+            json.dump({"labels": classes, "matrix": agg_cm.tolist()}, f, ensure_ascii=False, indent=2)
+        with open(out_simple / "cv_metrics.json", "w", encoding="utf-8") as f:
+            json.dump({"folds": fold_metrics,
+                       "mean_val_acc": float(np.mean([m["val_acc"] for m in fold_metrics])),
+                       "total_val_samples": int(agg_cm.sum())}, f, ensure_ascii=False, indent=2)
+        print(f"[CV] mean_val_acc={np.mean([m['val_acc'] for m in fold_metrics]):.4f}  total_val_samples={int(agg_cm.sum())}")
+        print("✅ Done (CV).")
         return
 
-    if not ok:
-        sys.exit(1)
+    # --- Single split path ---
+    if args.stratified:
+        train_labels, val_labels = _stratified_split(all_labels, args.val_ratio, args.seed)
+    else:
+        # plain random split
+        rnd = random.Random(args.seed)
+        shuffled = all_labels[:]; rnd.shuffle(shuffled)
+        n_val = int(round(len(shuffled) * args.val_ratio))
+        val_labels = shuffled[:n_val]; train_labels = shuffled[n_val:]
+
+    _save_split(outdir, "train", train_labels)
+    _save_split(outdir, "val",   val_labels)
+
+    print(f"[SPLIT] train={len(train_labels)}  val={len(val_labels)}  (stratified={args.stratified})")
+
+    # Train once
+    metrics, best, y_true, y_pred = _train_eval_once(
+        outdir, train_labels, val_labels, classes,
+        args.batch_size, args.epochs, args.lr, args.weight_decay, args.warmup_pct,
+        args.emb_dim, args.nhead, args.nlayers, args.dropout, args.patience,
+        args.aug, seed=args.seed, tag=""
+    )
+
+    # Confusion matrix on chosen eval set
+    eval_set = args.eval_set.lower()
+    if eval_set == "all":
+        # evaluate on ALL windows (optimistic, but per your request produces large counts)
+        print("[EVAL] Evaluating on ALL windows (train+val)")
+        # reuse trained model by calling _train_eval_once with train=train_labels, val=all_labels but no training?
+        # Instead, we quickly load the best model and run inference below:
+        try:
+            import torch
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            # rebuild model and load best
+            model = _build_model(len(classes), args.emb_dim, args.nhead, args.nlayers, args.dropout, device)
+            best_path = outdir / "_simple_outputs" / "best_model.pt"
+            if best_path.exists():
+                model.load_state_dict(torch.load(best_path, map_location=device))
+            model.eval()
+            # prepare a val loader over all labels (without training/metrics)
+            # reuse loaders utility with train_labels only for stats
+            stats = _compute_channel_stats_from_list(outdir, train_labels)
+            # pick target length as median of all
+            lengths = [it["length"] for it in all_labels] or [256]
+            target_len = int(sorted(lengths)[len(lengths)//2])
+            # quick DataLoader
+            from torch.utils.data import DataLoader
+            def _fix_len(x: np.ndarray, T: int) -> np.ndarray:
+                t = x.shape[1]
+                if t == T: return x
+                if t > T:
+                    st = (t - T) // 2
+                    return x[:, st:st+T]
+                pad = T - t
+                left = pad // 2; right = pad - left
+                return np.pad(x, ((0,0),(left,right)), mode="constant")
+            mean = np.array(stats["mean"], dtype=np.float32).reshape(6,1)
+            std  = np.array(stats["std"], dtype=np.float32).reshape(6,1)
+            class AllDS(torch.utils.data.Dataset):
+                def __init__(self, items): self.items = items
+                def __len__(self): return len(self.items)
+                def __getitem__(self, idx):
+                    it = self.items[idx]
+                    arr = np.load(outdir / it["rel_path"])
+                    arr = _fix_len(arr, target_len)
+                    arr = (arr - mean) / (std + 1e-8)
+                    import torch as _t
+                    x = _t.from_numpy(arr).float()
+                    y = int(it["label_id"])
+                    return x, y
+            ds = AllDS(all_labels)
+            ld = DataLoader(ds, batch_size=args.batch_size, shuffle=False, drop_last=False)
+            y_true_all, y_pred_all = [], []
+            with torch.no_grad():
+                for x,y in ld:
+                    x = x.to(device)
+                    logits = model(x)
+                    pred = logits.argmax(1).cpu().tolist()
+                    y_pred_all.extend(pred)
+                    y_true_all.extend(y.tolist())
+            cm = np.zeros((len(classes), len(classes)), dtype=int)
+            for t,p in zip(y_true_all, y_pred_all):
+                if 0 <= t < len(classes) and 0 <= p < len(classes):
+                    cm[t,p] += 1
+            _plot_confusion_matrix(cm.tolist(), classes, out_simple / "confusion_matrix.png", title="Confusion Matrix (ALL windows)")
+            with open(out_simple / "confusion_matrix.json", "w", encoding="utf-8") as f:
+                json.dump({"labels": classes, "matrix": cm.tolist()}, f, ensure_ascii=False, indent=2)
+            acc_all = float((cm.trace() / max(1, cm.sum())))
+            print(f"[EVAL-ALL] accuracy={acc_all:.4f}  samples={int(cm.sum())}")
+        except Exception as e:
+            print(f"[EVAL-ALL] failed: {e}")
+    else:
+        # already computed y_true/y_pred for val in _train_eval_once
+        cm = np.zeros((len(classes), len(classes)), dtype=int)
+        for t,p in zip(y_true, y_pred):
+            if 0 <= t < len(classes) and 0 <= p < len(classes):
+                cm[t,p] += 1
+        _plot_confusion_matrix(cm.tolist(), classes, out_simple / "confusion_matrix.png", title="Confusion Matrix (val)")
+        with open(out_simple / "confusion_matrix.json", "w", encoding="utf-8") as f:
+            json.dump({"labels": classes, "matrix": cm.tolist()}, f, ensure_ascii=False, indent=2)
+        print(f"[VAL] accuracy={float((cm.trace()/max(1,cm.sum()))):.4f}  samples={int(cm.sum())}")
+
+    print("\n✅ Done.")
+    print(f"   Windows dir: {outdir.resolve() / 'windows'}")
+    print(f"   Outputs:     {outdir.resolve() / '_simple_outputs'}")
 
 if __name__ == "__main__":
     main()

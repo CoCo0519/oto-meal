@@ -1,9 +1,9 @@
 % 读取PPG+IMU数据（空格分隔），并命名列
 % Read PPG+IMU (space-delimited) and name columns
-opts = detectImportOptions('G:\Project-Swallow\hyx_data\耳道-吞咽6次间隔10秒.txt','NumHeaderLines',1);
+opts = detectImportOptions('G:\Project-Swallow\hyx_data\喉咙-吞咽每5秒一次共31秒.txt','NumHeaderLines',1);
 opts.Delimiter = {' ','\t'};
 opts.VariableNames = {'PPG_G','PPG_IR','PPG_R','ACC_X','ACC_Y','ACC_Z'};
-T = readtable('G:\Project-Swallow\hyx_data\耳道-吞咽6次间隔10秒.txt', opts);
+T = readtable('G:\Project-Swallow\hyx_data\喉咙-吞咽每5秒一次共31秒.txt', opts);
 
 % 取绿光PPG作为示例，并去均值，减少直流分量
 % Use green PPG as example; remove mean to reduce DC

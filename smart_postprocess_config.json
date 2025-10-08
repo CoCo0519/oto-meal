@@ -1,5 +1,5 @@
 {
-  "watch_dir": "D:/BLE_Output",
+  "watch_dir": "G:\\Project-Swallow\\PPG_Debug\\PPGData",
   "extensions": [".txt"],
   "pattern": "{timestamp:%Y%m%d_%H%M%S}-{device}-{kind}-{seq:03d}.txt",
   "move_to_subdir_per_day": true,
@@ -14,7 +14,7 @@
   "backfill_existing": true,
   "poll_seconds": 1.0,
   "stable_checks": 3,
-  "launch_exe": "C:/path/to/BLE_CENTRAL.exe",
+  "launch_exe": "G:\\Project-Swallow\\PPG_V2.1\\BLE_CENTRAL.exe",
   "args_for_exe": [],
   "log_path": "smart_postprocess.log"
 }

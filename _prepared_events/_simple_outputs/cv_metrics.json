@@ -1,0 +1,56 @@
+{
+  "folds": [
+    {
+      "fold": 1,
+      "val_acc": 0.625,
+      "val_samples": 8
+    },
+    {
+      "fold": 2,
+      "val_acc": 0.7142857142857143,
+      "val_samples": 7
+    },
+    {
+      "fold": 3,
+      "val_acc": 0.2857142857142857,
+      "val_samples": 7
+    },
+    {
+      "fold": 4,
+      "val_acc": 0.6,
+      "val_samples": 5
+    },
+    {
+      "fold": 5,
+      "val_acc": 0.6,
+      "val_samples": 5
+    },
+    {
+      "fold": 6,
+      "val_acc": 1.0,
+      "val_samples": 3
+    },
+    {
+      "fold": 7,
+      "val_acc": 0.6666666666666666,
+      "val_samples": 3
+    },
+    {
+      "fold": 8,
+      "val_acc": 1.0,
+      "val_samples": 3
+    },
+    {
+      "fold": 9,
+      "val_acc": 0.6666666666666666,
+      "val_samples": 3
+    },
+    {
+      "fold": 10,
+      "val_acc": 1.0,
+      "val_samples": 3
+    }
+  ],
+  "mean_val_acc": 0.7158333333333334,
+  "total_val_samples": 47
+}

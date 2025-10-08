@@ -1,7 +1,7 @@
 % 运行本脚本前，请确保 batch_wavelet_denoise_txt.m 在 MATLAB 路径上。
 % Make sure batch_wavelet_denoise_txt.m is on the MATLAB path before running.
 
-% 采样格式：首行表头=1；每行 6 列数值（如：绿/红外/红/IMU X/Y/Z）；
+% % 采样格式：首行表头=1；每行 6 列数值（如：绿/红外/红/IMU X/Y/Z）；
 % HeaderLines=1; each row has 6 numeric columns (e.g., Green/IR/Red/IMU X/Y/Z).
 
 % —— G 盘路径 —— | G drive paths

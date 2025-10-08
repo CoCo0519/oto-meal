@@ -1,0 +1,57 @@
+file,t_s,label
+耳道- 咳嗽共6次间隔10秒_approx.txt,8.750,cough
+耳道- 咳嗽共6次间隔10秒_approx.txt,9.250,cough
+耳道- 咳嗽共6次间隔10秒_approx.txt,19.250,cough
+耳道- 咳嗽共6次间隔10秒_approx.txt,19.617,cough
+耳道- 咳嗽共6次间隔10秒_approx.txt,29.250,cough
+耳道- 咳嗽共6次间隔10秒_approx.txt,29.617,cough
+耳道-吞咽6次间隔10秒_approx.txt,2.133,swallow
+耳道-吞咽6次间隔10秒_approx.txt,12.250,swallow
+耳道-吞咽6次间隔10秒_approx.txt,21.650,swallow
+耳道-吞咽6次间隔10秒_approx.txt,32.250,swallow
+耳道-吞咽每5秒一次共31秒_approx.txt,5.491,swallow
+耳道-吞咽每5秒一次共31秒_approx.txt,10.394,swallow
+耳道-吞咽每5秒一次共31秒_approx.txt,15.500,swallow
+耳道-吞咽每5秒一次共31秒_approx.txt,20.099,swallow
+耳道-吞咽每5秒一次共31秒_approx.txt,25.529,swallow
+耳道-吞咽每5秒一次共61秒_approx.txt,4.649,swallow
+耳道-吞咽每5秒一次共61秒_approx.txt,9.466,swallow
+耳道-吞咽每5秒一次共61秒_approx.txt,14.198,swallow
+耳道-吞咽每5秒一次共61秒_approx.txt,19.183,swallow
+耳道-吞咽每5秒一次共61秒_approx.txt,24.484,swallow
+耳道-吞咽每5秒一次共61秒_approx.txt,29.238,swallow
+耳道-吞咽每5秒一次共61秒_approx.txt,34.370,swallow
+耳道-吞咽每5秒一次共61秒_approx.txt,38.661,swallow
+耳道-吞咽每5秒一次共61秒_approx.txt,43.457,swallow
+耳道-吞咽每5秒一次共61秒_approx.txt,48.653,swallow
+耳道-吞咽每5秒一次共61秒_approx.txt,53.512,swallow
+耳道-吞咽每5秒一次共61秒_approx.txt,59.317,swallow
+耳道-咀嚼5下共6次间隔10秒_approx.txt,3.875,chew
+耳道-咀嚼5下共6次间隔10秒_approx.txt,4.000,chew
+耳道-咀嚼5下共6次间隔10秒_approx.txt,13.850,chew
+耳道-咀嚼5下共6次间隔10秒_approx.txt,13.875,chew
+耳道-咀嚼5下共6次间隔10秒_approx.txt,23.667,chew
+耳道-咀嚼5下共6次间隔10秒_approx.txt,23.875,chew
+耳道-咳嗽每5秒一次共31秒_approx.txt,5.730,cough
+耳道-咳嗽每5秒一次共31秒_approx.txt,10.583,cough
+耳道-咳嗽每5秒一次共31秒_approx.txt,15.393,cough
+耳道-咳嗽每5秒一次共31秒_approx.txt,20.225,cough
+耳道-咳嗽每5秒一次共31秒_approx.txt,24.971,cough
+耳道-喝水共4次间隔10秒_approx.txt,1.050,drink
+耳道-喝水共4次间隔10秒_approx.txt,11.017,drink
+耳道-喝水共4次间隔10秒_approx.txt,21.600,drink
+耳道-喝水共4次间隔10秒_approx.txt,32.000,drink
+耳道-说话共6次持续5秒间隔10秒_approx.txt,9.583,speak
+耳道-说话共6次持续5秒间隔10秒_approx.txt,10.125,speak
+耳道-说话共6次持续5秒间隔10秒_approx.txt,20.000,speak
+耳道-说话共6次持续5秒间隔10秒_approx.txt,20.125,speak
+耳道-说话共6次持续5秒间隔10秒_approx.txt,30.117,speak
+耳道-静息30秒_approx.txt,1.850,unknown
+耳道-静息30秒_approx.txt,3.950,unknown
+耳道-静息30秒_approx.txt,6.933,unknown
+耳道-静息30秒_approx.txt,10.133,unknown
+耳道-静息30秒_approx.txt,11.450,unknown
+耳道-静息30秒_approx.txt,14.983,unknown
+耳道-静息30秒_approx.txt,18.617,unknown
+耳道-静息30秒_approx.txt,20.250,unknown
+耳道-静息30秒_approx.txt,23.650,unknown

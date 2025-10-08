@@ -4,6 +4,146 @@ Github: [Project-Swallow](https://github.com/tsawke/Project-Swallow.git)
 
 Latest package: [URL for Synology NAS](https://gofile.me/7xDmN/6LaSVzQNf)
 
+## batch_export_wdenoise_denoise_only.m
+
+Implement wavelet approximation and generate both .txt and .mat.
+
+Run like:
+
+```matlab
+batch_export_wdenoise_denoise_only('G:\Project-Swallow\hyx_data', ...
+    'G:\Project-Swallow\denoised_hyx_data', ...
+    'HeaderLines',1,'Recursive',true, ...
+    'Level',4,'Wavelet','sym8', ...
+    'Method','Bayes','Rule','Soft','Noise','LevelIndependent', ...
+    'DetrendMode','linear');
+
+```
+
+## batch_plot_six_columns.m
+
+Run and choose a .txt, then Wavelet Signal Denoiser(Matlab) will be created based on each column.
+
+## view_six_signals_from_mat.m
+
+View signals from .mat(six columns).
+
+## generate_event_config.py
+
+Scans your data folder for `*_denoise.txt`, auto-fills an editable `events_config.json` (event type, per-event duration, start times, total duration). It can parse filenames like `Throat- Cough x6 every 10s_denoise.txt` or `喉咙-吞咽每5秒一次共31秒_denoise.txt`.
+
+**Basic usage**
+
+```bash
+python generate_event_config.py --data-dir ./denoised_hyx_data --out ./events_config.json
+```
+
+**Key options**
+
+- `--start-at-zero` — Start events at `0` then every Δ seconds: `[0, Δ, 2Δ, ...]`.
+   Default starts at Δ: `[Δ, 2Δ, ...]`.
+- `--default-label chew|drink|cough|swallow|talk|other` — Fallback label if not recognized from the filename.
+- `--default-duration 2.0` — Default per-event duration (seconds) if not present in the filename.
+- Incremental updates: if `events_config.json` already exists, the script **reuses** it and **appends only new** `_denoise` files (existing entries aren’t touched).
+
+**Filename parsing (auto-fill)**
+
+- **Count**: `共6次`, `6次`, `6x`
+- **Interval**: `间隔10秒`, `每隔5秒`, `每5秒(一次)`, `2.5s`
+- **Per-event duration (optional)**: `每次1秒`, `持续2s`
+- **Total duration (optional)**: `共31秒`, `总时长31秒`, `31s total`
+- Logic:
+  - If **interval Δ + total T** → starts = `[Δ, 2Δ, ... ⌊T/Δ⌋·Δ]`, total = `T`
+  - Else if **count N + interval Δ** → starts = `[Δ, 2Δ, ..., NΔ]`, total = `N·Δ`
+  - Add `--start-at-zero` to instead get `[0, Δ, 2Δ, ...]`
+
+**After running:**
+ Open `events_config.json`, review and tweak `label`, `event_duration_sec`, `event_starts_sec`, `total_duration_sec` per file if needed.
+
+ ## run_behavior_classification.py
+
+### Train (JSON-only windowing, multimodal)
+
+Basic long-ish run on **ear-canal only**:
+
+```bat
+python run_behavior_classification.py ^
+  --data-dir .\denoised_hyx_data ^
+  --event-config .\events_config.json ^
+  --epochs 80 --batch-size 128 --lr 3e-4
+```
+
+Evaluate on **all** windows (huge confusion matrix):
+
+```bat
+python run_behavior_classification.py ^
+  --data-dir .\denoised_hyx_data ^
+  --event-config .\events_config.json ^
+  --epochs 200 --batch-size 256 --emb-dim 320 --nlayers 8 --nhead 8 ^
+  --eval-set all
+```
+
+10-fold cross-validation (recommended for reliable metrics):
+
+```bat
+python run_behavior_classification.py ^
+  --data-dir .\denoised_hyx_data ^
+  --event-config .\events_config.json ^
+  --cv-folds 10 --epochs 80 --batch-size 192
+```
+
+> Add `--use-throat` to include throat files too.
+
+### Results:
+
+- Console INFO for each window:
+   `start/duration -> [row_start:row_end) Hz=...`
+- Outputs under `._prepared_events\`:
+  - `windows\sample_*.npy`, `all_labels.json`
+  - `train\labels.json`, `val\labels.json`
+  - `channel_stats.json`
+  - `_simple_outputs\training_accuracy.png`
+  - `_simple_outputs\confusion_matrix.png` + `.json`
+  - `_simple_outputs\training_metrics.json`
+  - `_simple_outputs\best_model.pt`
+  - (CV) `_simple_outputs\confusion_matrix_cv.png/json`, `cv_metrics.json`
+
+## ignore_large_files.py
+
+Run it directly to scan the current folder with a 100MB threshold and append oversized files to `.gitignore`.
+
+```bash
+python ignore_large_files.py
+```
+
+- Specify a scan root (e.g., your repo path).
+
+```bash
+python ignore_large_files.py --root /path/to/repo
+```
+
+- Customize the threshold with units like `MB/GiB` (e.g., 750MiB, 1GiB).
+
+```bash
+python ignore_large_files.py --threshold 750MiB
+```
+
+- Point to a specific `.gitignore` file (useful if it’s not in the root).
+
+```bash
+python ignore_large_files.py --gitignore /path/to/.gitignore
+```
+
+- Note: For files already tracked by Git, untrack them manually or `.gitignore` won’t take effect.
+
+```bash
+git rm --cached <file>    # then commit
+```
+
+---
+
+**archived**
+
 ## ReadDirectory.py
 
 Batch-process all `.txt` files inside a directory.

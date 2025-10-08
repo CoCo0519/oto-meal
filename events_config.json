@@ -1,0 +1,350 @@
+{
+  "version": 2,
+  "allowed_labels": [
+    "chew",
+    "drink",
+    "cough",
+    "swallow",
+    "talk",
+    "other"
+  ],
+  "note": "文件自动/增量生成。规则：\n  - 若识别到“间隔Δ、总时长T”，则 starts=[Δ,2Δ,...,⌊T/Δ⌋·Δ]（默认从Δ开始，不含T本身）；\n  - 若识别到“共N次、间隔Δ”，则 starts=[Δ,2Δ,...,NΔ]；\n  - 加 --start-at-zero 时：starts=[0,Δ,2Δ,...]；\n  - 仍建议人工核对。Hz = rows_detected / total_duration_sec。",
+  "files": [
+    {
+      "file": "喉咙- 咳嗽共6次间隔10秒_denoise.txt",
+      "label": "cough",
+      "event_duration_sec": 2.0,
+      "event_starts_sec": [
+        10.0,
+        20.0,
+        30.0,
+        40.0,
+        50.0,
+        60.0
+      ],
+      "total_duration_sec": 60.0,
+      "rows_detected": 2772,
+      "autofill": true,
+      "autofill_notes": [
+        "auto:count+interval"
+      ]
+    },
+    {
+      "file": "喉咙-吞咽6次间隔10秒_denoise.txt",
+      "label": "swallow",
+      "event_duration_sec": 2.0,
+      "event_starts_sec": [
+        10.0,
+        20.0,
+        30.0,
+        40.0,
+        50.0,
+        60.0
+      ],
+      "total_duration_sec": 60.0,
+      "rows_detected": 2492,
+      "autofill": true,
+      "autofill_notes": [
+        "auto:count+interval"
+      ]
+    },
+    {
+      "file": "喉咙-吞咽每5秒一次共31秒_denoise.txt",
+      "label": "swallow",
+      "event_duration_sec": 2.0,
+      "event_starts_sec": [
+        5.0,
+        10.0,
+        15.0,
+        20.0,
+        25.0,
+        30.0
+      ],
+      "total_duration_sec": 31.0,
+      "rows_detected": 1532,
+      "autofill": true,
+      "autofill_notes": [
+        "auto:interval+total"
+      ]
+    },
+    {
+      "file": "喉咙-吞咽每5秒一次共61秒_denoise.txt",
+      "label": "swallow",
+      "event_duration_sec": 2.0,
+      "event_starts_sec": [
+        5.0,
+        10.0,
+        15.0,
+        20.0,
+        25.0,
+        30.0,
+        35.0,
+        40.0,
+        45.0,
+        50.0,
+        55.0,
+        60.0
+      ],
+      "total_duration_sec": 61.0,
+      "rows_detected": 2902,
+      "autofill": true,
+      "autofill_notes": [
+        "auto:interval+total"
+      ]
+    },
+    {
+      "file": "喉咙-咀嚼5下共6次间隔10秒_denoise.txt",
+      "label": "chew",
+      "event_duration_sec": 2.0,
+      "event_starts_sec": [
+        10.0,
+        20.0,
+        30.0,
+        40.0,
+        50.0,
+        60.0
+      ],
+      "total_duration_sec": 60.0,
+      "rows_detected": 2552,
+      "autofill": true,
+      "autofill_notes": [
+        "auto:count+interval"
+      ]
+    },
+    {
+      "file": "喉咙-咳嗽每5秒一次共31秒_denoise.txt",
+      "label": "cough",
+      "event_duration_sec": 2.0,
+      "event_starts_sec": [
+        5.0,
+        10.0,
+        15.0,
+        20.0,
+        25.0,
+        30.0
+      ],
+      "total_duration_sec": 31.0,
+      "rows_detected": 1452,
+      "autofill": true,
+      "autofill_notes": [
+        "auto:interval+total"
+      ]
+    },
+    {
+      "file": "喉咙-喝水共4次间隔10秒_denoise.txt",
+      "label": "drink",
+      "event_duration_sec": 2.0,
+      "event_starts_sec": [
+        10.0,
+        20.0,
+        30.0,
+        40.0
+      ],
+      "total_duration_sec": 40.0,
+      "rows_detected": 1992,
+      "autofill": true,
+      "autofill_notes": [
+        "auto:count+interval"
+      ]
+    },
+    {
+      "file": "喉咙-说话共6次持续5秒间隔10秒_denoise.txt",
+      "label": "talk",
+      "event_duration_sec": 5.0,
+      "event_starts_sec": [
+        10.0,
+        20.0,
+        30.0,
+        40.0,
+        50.0,
+        60.0
+      ],
+      "total_duration_sec": 60.0,
+      "rows_detected": 2682,
+      "autofill": true,
+      "autofill_notes": [
+        "auto:count+interval"
+      ]
+    },
+    {
+      "file": "喉咙-静息30秒_denoise.txt",
+      "label": "chew",
+      "event_duration_sec": 2.0,
+      "event_starts_sec": [],
+      "total_duration_sec": null,
+      "rows_detected": 1492,
+      "autofill": true,
+      "autofill_notes": [
+        "auto:interval_only"
+      ]
+    },
+    {
+      "file": "耳道- 咳嗽共6次间隔10秒_denoise.txt",
+      "label": "cough",
+      "event_duration_sec": 2.0,
+      "event_starts_sec": [
+        10.0,
+        20.0,
+        30.0,
+        40.0,
+        50.0,
+        60.0
+      ],
+      "total_duration_sec": 60.0,
+      "rows_detected": 2912,
+      "autofill": true,
+      "autofill_notes": [
+        "auto:count+interval"
+      ]
+    },
+    {
+      "file": "耳道-吞咽6次间隔10秒_denoise.txt",
+      "label": "swallow",
+      "event_duration_sec": 2.0,
+      "event_starts_sec": [
+        10.0,
+        20.0,
+        30.0,
+        40.0,
+        50.0,
+        60.0
+      ],
+      "total_duration_sec": 60.0,
+      "rows_detected": 2412,
+      "autofill": true,
+      "autofill_notes": [
+        "auto:count+interval"
+      ]
+    },
+    {
+      "file": "耳道-吞咽每5秒一次共31秒_denoise.txt",
+      "label": "swallow",
+      "event_duration_sec": 2.0,
+      "event_starts_sec": [
+        5.0,
+        10.0,
+        15.0,
+        20.0,
+        25.0,
+        30.0
+      ],
+      "total_duration_sec": 31.0,
+      "rows_detected": 1592,
+      "autofill": true,
+      "autofill_notes": [
+        "auto:interval+total"
+      ]
+    },
+    {
+      "file": "耳道-吞咽每5秒一次共61秒_denoise.txt",
+      "label": "swallow",
+      "event_duration_sec": 2.0,
+      "event_starts_sec": [
+        5.0,
+        10.0,
+        15.0,
+        20.0,
+        25.0,
+        30.0,
+        35.0,
+        40.0,
+        45.0,
+        50.0,
+        55.0,
+        60.0
+      ],
+      "total_duration_sec": 61.0,
+      "rows_detected": 3052,
+      "autofill": true,
+      "autofill_notes": [
+        "auto:interval+total"
+      ]
+    },
+    {
+      "file": "耳道-咀嚼5下共6次间隔10秒_denoise.txt",
+      "label": "chew",
+      "event_duration_sec": 2.0,
+      "event_starts_sec": [
+        10.0,
+        20.0,
+        30.0,
+        40.0,
+        50.0,
+        60.0
+      ],
+      "total_duration_sec": 60.0,
+      "rows_detected": 2612,
+      "autofill": true,
+      "autofill_notes": [
+        "auto:count+interval"
+      ]
+    },
+    {
+      "file": "耳道-咳嗽每5秒一次共31秒_denoise.txt",
+      "label": "cough",
+      "event_duration_sec": 2.0,
+      "event_starts_sec": [
+        5.0,
+        10.0,
+        15.0,
+        20.0,
+        25.0,
+        30.0
+      ],
+      "total_duration_sec": 31.0,
+      "rows_detected": 1352,
+      "autofill": true,
+      "autofill_notes": [
+        "auto:interval+total"
+      ]
+    },
+    {
+      "file": "耳道-喝水共4次间隔10秒_denoise.txt",
+      "label": "drink",
+      "event_duration_sec": 2.0,
+      "event_starts_sec": [
+        10.0,
+        20.0,
+        30.0,
+        40.0
+      ],
+      "total_duration_sec": 40.0,
+      "rows_detected": 1752,
+      "autofill": true,
+      "autofill_notes": [
+        "auto:count+interval"
+      ]
+    },
+    {
+      "file": "耳道-说话共6次持续5秒间隔10秒_denoise.txt",
+      "label": "talk",
+      "event_duration_sec": 5.0,
+      "event_starts_sec": [
+        10.0,
+        20.0,
+        30.0,
+        40.0,
+        50.0,
+        60.0
+      ],
+      "total_duration_sec": 60.0,
+      "rows_detected": 2882,
+      "autofill": true,
+      "autofill_notes": [
+        "auto:count+interval"
+      ]
+    },
+    {
+      "file": "耳道-静息30秒_denoise.txt",
+      "label": "chew",
+      "event_duration_sec": 2.0,
+      "event_starts_sec": [],
+      "total_duration_sec": null,
+      "rows_detected": 1452,
+      "autofill": true,
+      "autofill_notes": [
+        "auto:interval_only"
+      ]
+    }
+  ]
+}

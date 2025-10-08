@@ -1,0 +1,27 @@
+2025-10-08 20:56:06,153 [INFO] Config: {"watch_dir": "G:/BLE_Output", "extensions": [".txt"], "pattern": "{timestamp:%Y%m%d_%H%M%S}-{device}-{kind}-{seq:03d}.txt", "move_to_subdir_per_day": true, "per_day_folder_format": "%Y-%m-%d", "modify": {"normalize_newlines": "crlf", "ensure_utf8": true, "add_header": true, "header_prefix": "# ", "create_json_sidecar": true}, "backfill_existing": true, "poll_seconds": 1.0, "stable_checks": 3, "launch_exe": "G:\\Project-Swallow\\PPG_Debug\\BLE_CENTRAL.exe", "args_for_exe": [], "log_path": "smart_postprocess.log"}
+2025-10-08 20:56:06,157 [INFO] Launching EXE: G:\Project-Swallow\PPG_Debug\BLE_CENTRAL.exe
+2025-10-08 20:56:06,183 [INFO] watchdog not found; falling back to polling. (pip install watchdog)
+2025-10-08 21:02:13,244 [INFO] Config: {"watch_dir": "G:/BLE_Output", "extensions": [".txt"], "pattern": "{timestamp:%Y%m%d_%H%M%S}-{device}-{kind}-{seq:03d}.txt", "move_to_subdir_per_day": true, "per_day_folder_format": "%Y-%m-%d", "modify": {"normalize_newlines": "crlf", "ensure_utf8": true, "add_header": true, "header_prefix": "# ", "create_json_sidecar": true}, "backfill_existing": true, "poll_seconds": 1.0, "stable_checks": 3, "launch_exe": "G:\\Project-Swallow\\PPG_Debug\\BLE_CENTRAL.exe", "args_for_exe": [], "log_path": "smart_postprocess.log"}
+2025-10-08 21:02:13,246 [INFO] Launching EXE: G:\Project-Swallow\PPG_Debug\BLE_CENTRAL.exe
+2025-10-08 21:02:13,249 [INFO] watchdog not found; falling back to polling. (pip install watchdog)
+2025-10-08 21:03:12,006 [INFO] Config: {"watch_dir": "G:/BLE_Output", "extensions": [".txt"], "pattern": "{timestamp:%Y%m%d_%H%M%S}-{device}-{kind}-{seq:03d}.txt", "move_to_subdir_per_day": true, "per_day_folder_format": "%Y-%m-%d", "modify": {"normalize_newlines": "crlf", "ensure_utf8": true, "add_header": true, "header_prefix": "# ", "create_json_sidecar": true}, "backfill_existing": true, "poll_seconds": 1.0, "stable_checks": 3, "launch_exe": "G:\\Project-Swallow\\PPG_Debug\\BLE_CENTRAL.exe", "args_for_exe": [], "log_path": "smart_postprocess.log"}
+2025-10-08 21:03:12,008 [INFO] Launching EXE: G:\Project-Swallow\PPG_Debug\BLE_CENTRAL.exe
+2025-10-08 21:03:12,011 [INFO] watchdog not found; falling back to polling. (pip install watchdog)
+2025-10-08 21:05:31,460 [INFO] Config: {"watch_dir": "G:\\Project-Swallow\\PPG_Debug\\PPGData", "extensions": [".txt"], "pattern": "{timestamp:%Y%m%d_%H%M%S}-{device}-{kind}-{seq:03d}.txt", "move_to_subdir_per_day": true, "per_day_folder_format": "%Y-%m-%d", "modify": {"normalize_newlines": "crlf", "ensure_utf8": true, "add_header": true, "header_prefix": "# ", "create_json_sidecar": true}, "backfill_existing": true, "poll_seconds": 1.0, "stable_checks": 3, "launch_exe": "G:\\Project-Swallow\\PPG_Debug\\BLE_CENTRAL.exe", "args_for_exe": [], "log_path": "smart_postprocess.log"}
+2025-10-08 21:05:31,461 [INFO] Detected new file: G:\Project-Swallow\PPG_Debug\PPGData\PPG_1_20251001_220710.txt
+2025-10-08 21:05:34,471 [INFO] Processed -> G:\Project-Swallow\PPG_Debug\PPGData\2025-10-01\20251001_220710-NODEV-raw-001.txt
+2025-10-08 21:05:34,473 [INFO] Detected new file: G:\Project-Swallow\PPG_Debug\PPGData\PPG_1_20251008_205606.txt
+2025-10-08 21:05:37,481 [INFO] Processed -> G:\Project-Swallow\PPG_Debug\PPGData\2025-10-08\20251008_205606-NODEV-raw-001.txt
+2025-10-08 21:05:37,481 [INFO] Detected new file: G:\Project-Swallow\PPG_Debug\PPGData\PPG_1_20251008_210213.txt
+2025-10-08 21:05:40,491 [INFO] Processed -> G:\Project-Swallow\PPG_Debug\PPGData\2025-10-08\20251008_210213-NODEV-raw-003.txt
+2025-10-08 21:05:40,491 [INFO] Detected new file: G:\Project-Swallow\PPG_Debug\PPGData\PPG_1_20251008_210312.txt
+2025-10-08 21:05:43,499 [INFO] Processed -> G:\Project-Swallow\PPG_Debug\PPGData\2025-10-08\20251008_210312-NODEV-raw-005.txt
+2025-10-08 21:05:43,499 [INFO] Detected new file: G:\Project-Swallow\PPG_Debug\PPGData\PPG_2_20251001_220710.txt
+2025-10-08 21:05:46,509 [INFO] Processed -> G:\Project-Swallow\PPG_Debug\PPGData\2025-10-01\20251001_220710-NODEV-raw-003.txt
+2025-10-08 21:05:46,511 [INFO] Launching EXE: G:\Project-Swallow\PPG_Debug\BLE_CENTRAL.exe
+2025-10-08 21:05:46,513 [INFO] watchdog not found; falling back to polling. (pip install watchdog)
+2025-10-08 21:05:47,515 [INFO] Detected new file: G:\Project-Swallow\PPG_Debug\PPGData\PPG_1_20251008_210546.txt
+2025-10-08 21:05:50,521 [INFO] Processed -> G:\Project-Swallow\PPG_Debug\PPGData\2025-10-08\20251008_210546-NODEV-raw-007.txt
+2025-10-08 21:08:37,719 [INFO] Config: {"watch_dir": "G:\\Project-Swallow\\PPG_Debug\\PPGData", "extensions": [".txt"], "pattern": "{timestamp:%Y%m%d_%H%M%S}-{device}-{kind}-{seq:03d}.txt", "move_to_subdir_per_day": true, "per_day_folder_format": "%Y-%m-%d", "modify": {"normalize_newlines": "crlf", "ensure_utf8": true, "add_header": true, "header_prefix": "# ", "create_json_sidecar": true}, "backfill_existing": true, "poll_seconds": 1.0, "stable_checks": 3, "launch_exe": "G:\\Project-Swallow\\PPG_V2.1\\BLE_CENTRAL.exe", "args_for_exe": [], "log_path": "smart_postprocess.log"}
+2025-10-08 21:08:37,722 [INFO] Launching EXE: G:\Project-Swallow\PPG_V2.1\BLE_CENTRAL.exe
+2025-10-08 21:08:37,729 [INFO] watchdog not found; falling back to polling. (pip install watchdog)
