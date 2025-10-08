@@ -1,0 +1,31 @@
+{
+    "root_dir": "",
+    "recursive": true,
+    "only_approx": true,
+  
+    "hz": 40.0,
+    "time_col": 0,
+    "header_lines": 2,
+    "delim": "auto",
+    "time_unit": "s",
+  
+    "remove_dc": true,
+    "hp": 0.05,
+    "lp": 0.0,
+  
+    "window": "hamming",
+    "nperseg": 160,
+    "noverlap": 144,
+    "nfft": 2048,
+    "mode": "magnitude",
+    "db_scale": true,
+  
+    "fmin": 0.0,
+    "fmax": 6.0,
+  
+    "render": "imshow-bicubic",
+    "cmap": "turbo",
+    "dr_db": 70.0,
+    "vmax_pct": 99.8
+  }
+  

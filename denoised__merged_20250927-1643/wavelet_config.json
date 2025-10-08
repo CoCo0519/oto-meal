@@ -1,0 +1,21 @@
+{
+  "fs": 100.0,
+  "channel": "green",
+  "wavelet": "db6",
+  "decomposition_level": 4,
+  "mode": "symmetric",
+  "threshold": {
+    "strategy": "universal",
+    "scale": 1.0,
+    "manual_value": null,
+    "threshold_mode": "soft"
+  },
+  "plotting": {
+    "figsize": [
+      12,
+      6
+    ]
+  },
+  "ppg_denoise": true,
+  "imu_denoise": true
+}

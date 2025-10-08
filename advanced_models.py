@@ -69,12 +69,10 @@ class MultiHeadSelfAttention(nn.Module):
     def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         batch_size, seq_len = x.size(0), x.size(1)
         
-        # 计算Q, K, V
         Q = self.w_q(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
         K = self.w_k(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
         V = self.w_v(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
         
-        # 计算注意力分数
         scores = torch.matmul(Q, K.transpose(-2, -1)) / self.scale
         
         if mask is not None:
@@ -83,7 +81,6 @@ class MultiHeadSelfAttention(nn.Module):
         attention_weights = F.softmax(scores, dim=-1)
         attention_weights = self.dropout(attention_weights)
         
-        # 应用注意力权重
         context = torch.matmul(attention_weights, V)
         context = context.transpose(1, 2).contiguous().view(
             batch_size, seq_len, self.d_model
@@ -93,7 +90,6 @@ class MultiHeadSelfAttention(nn.Module):
         return output
 
 class TransformerBlock(nn.Module):
-    """Transformer编码器块"""
     
     def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1):
         super(TransformerBlock, self).__init__()

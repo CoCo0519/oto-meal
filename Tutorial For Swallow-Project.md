@@ -1,5 +1,7 @@
 # Tutorial For Project-Swallow
 
+Github: [Project-Swallow](https://github.com/tsawke/Project-Swallow.git)
+
 Latest package: [URL for Synology NAS](https://gofile.me/7xDmN/6LaSVzQNf)
 
 ## ReadDirectory.py
@@ -32,6 +34,20 @@ Edit `txt = './xxx_data/xxx.txt'` in `Readtxt.py`, then run:
 ```bat
 python ./Readtxt.py
 ```
+
+## run_export_approx.m
+
+Run this script in Matlab to denoise signal by wavelet approximation and export approximated signal in txt.
+
+Tips: batch_export_approx_txt.m needed.
+
+## approx_txt_viewer.py
+
+```bat
+python approx_txt_viewer.py
+```
+
+Scan and generate the approximated chart. 
 
 ## ppg_advanced_analysis.py
 
@@ -107,7 +123,7 @@ python run_behavior_classification.py --full-pipeline --mixed-precision --batch-
 
 # Merge data via glob and run
 python run_behavior_classification.py --full-pipeline --data-glob "./*_data" --merge-strategy copy
-python run_behavior_classification.py --full-pipeline --data-glob "./ppg_denoised_data/*_denoised" --merge-strategy copy
+python run_behavior_classification.py --full-pipeline --data-glob "./ppg_denoised_data/*_de'no'i" --merge-strategy copy
 ```
 
 ## archived/

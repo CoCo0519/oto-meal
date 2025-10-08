@@ -1,0 +1,22 @@
+{
+  "fs": 100,
+  "channel": "green",
+  "method": "bayes",
+  "wavelet": "sym8",
+  "decomposition_level": 7,
+  "mode": "symmetric",
+  "threshold": {
+    "strategy": "bayes",
+    "scale": 1.0,
+    "manual_value": null,
+    "threshold_mode": "soft",
+    "q_value": 0.05,
+    "noise_estimate": "level_independent"
+  },
+  "plotting": {
+    "figsize": [12, 6]
+  },
+  "ppg_denoise": true,
+  "imu_denoise": true
+}
+

@@ -1,0 +1,29 @@
+{
+  "fs": 100.0,
+  "channel": "green",
+  "method": "wavelet",
+  "wavelet": "db6",
+  "decomposition_level": 6,
+  "mode": "symmetric",
+  "threshold": {
+    "strategy": "bayes",
+    "scale": 1.0,
+    "manual_value": null,
+    "threshold_mode": "soft"
+  },
+  "plotting": {
+    "figsize": [
+      12,
+      6
+    ]
+  },
+  "ppg_denoise": true,
+  "imu_denoise": true,
+  "selected_directories": [
+    "_merged_data",
+    "hyx_data",
+    "lhr_data",
+    "lj_data",
+    "ppg_denoised_data"
+  ]
+}
